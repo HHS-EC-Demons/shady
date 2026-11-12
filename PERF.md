@@ -1,12 +1,16 @@
 # Performance
 
-Measured 2026-11-11 on a 2018 MacBook Pro. The headless browser rendered on the Intel UHD Graphics 630 integrated chip through ANGLE Metal, so these are integrated graphics numbers. The Radeon was not used.
+Measured 2026-11-11 on a 2018 MacBook Pro in a headless browser. The canvases ask for the fastest chip, so on this machine every number below was drawn by the Radeon Pro 555X, not by the Intel UHD Graphics 630. An earlier version of this file said Intel. That was wrong: only a separate chip check ran on Intel.
+
+Add `gpu=low` to the page address to force the Intel chip. `checks/scroll-perf.js` now runs both chips and prints the chip name with every result. A clean Intel run is still to be recorded here.
+
+The tables below also predate the surface detail, building roofs, cars and people. They need a fresh run on a quiet machine.
 
 ## Budget and result
 
 | Budget | Result |
 | --- | --- |
-| 60 fps while scrolling at 1080p on integrated graphics | 60 fps average, 60 fps at the 1% low, worst frame 17 ms |
+| 60 fps while scrolling at 1080p on integrated graphics | Not measured yet on Intel. On the Radeon, 60 fps average and 60 fps at the 1% low |
 | Under 100 draw calls | 31 at the busiest beat |
 | Under 300k triangles | 77k at the busiest beat |
 | Initial JavaScript under 350 KB gzipped | 72 KB before the 3D code is asked for |
