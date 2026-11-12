@@ -1,0 +1,11 @@
+---
+import Base from '../layouts/Base.astro';
+import PlanSheet from '../components/plan/PlanSheet.tsx';
+
+const raw = import.meta.env.BASE_URL;
+const base = raw.endsWith('/') ? raw : `${raw}/`;
+---
+
+<Base title="Shade plan" description="A printable shade plan with every tree and sail, where it goes and what it cools." current="plan">
+  <PlanSheet client:only="react" base={base} />
+</Base>
