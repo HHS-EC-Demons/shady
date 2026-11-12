@@ -5,8 +5,8 @@ import tailwindcss from '@tailwindcss/vite';
 const icons = ['ArrowCounterClockwise', 'ArrowsOut', 'Check', 'MagnifyingGlass', 'Plant', 'Printer', 'Thermometer', 'Trash', 'Tree', 'Umbrella', 'X'];
 
 export default defineConfig({
-  site: process.env.SITE_URL ?? 'http://localhost:4321',
-  base: process.env.BASE_PATH ?? '/',
+  site: process.env.SITE_URL || 'http://localhost:4321',
+  base: process.env.BASE_PATH || '/',
   trailingSlash: 'ignore',
   integrations: [react()],
   devToolbar: { enabled: false },

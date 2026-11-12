@@ -20,6 +20,9 @@ const links = [
   { slug: 'sources', label: 'Sources' },
 ];
 const fullTitle = title === 'Shady' ? 'Shady' : `${title} | Shady`;
+const home = Astro.site ?? Astro.url;
+const share = new URL(`${base}og.png?v=3`, home).href;
+const address = new URL(Astro.url.pathname, home).href;
 ---
 
 <!doctype html>
@@ -33,11 +36,13 @@ const fullTitle = title === 'Shady' ? 'Shady' : `${title} | Shady`;
     <meta property="og:title" content={fullTitle} />
     <meta property="og:description" content={description} />
     <meta property="og:type" content="website" />
-    <meta property="og:image" content={`${base}og.png?v=3`} />
+    <meta property="og:url" content={address} />
+    <meta property="og:image" content={share} />
     <meta name="twitter:card" content="summary_large_image" />
     <meta name="twitter:title" content={fullTitle} />
     <meta name="twitter:description" content={description} />
-    <meta name="twitter:image" content={`${base}og.png?v=3`} />
+    <meta name="twitter:image" content={share} />
+    <link rel="canonical" href={address} />
     <link rel="icon" href={`${base}favicon.svg?v=1`} type="image/svg+xml" />
     <link rel="icon" href={`${base}favicon.png?v=1`} type="image/png" sizes="64x64" />
     <link rel="apple-touch-icon" href={`${base}apple-touch-icon.png?v=1`} />
