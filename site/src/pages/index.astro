@@ -1,0 +1,90 @@
+---
+import Base from '../layouts/Base.astro';
+import Film from '../components/film/Film.tsx';
+import { Detail, FindSchool } from '../components/film/Jump.tsx';
+import type { Campus } from '../engine/campus';
+import { dollars } from '../engine/cost';
+import { tellStory } from '../engine/story';
+import { clockLabel } from '../engine/sun';
+import type { Weather } from '../engine/weather';
+import data from '../../public/campus/heritage.json';
+
+const raw = import.meta.env.BASE_URL;
+const base = raw.endsWith('/') ? raw : `${raw}/`;
+const file = data as unknown as { campus: Campus; weather: Weather };
+const story = tellStory(file.campus, file.weather);
+
+const more = [
+  { big: `${story.air}°F`, small: `${story.school}`, href: 'yard' },
+  { big: `${story.trees.length} trees`, small: 'A plan to print', href: 'plan' },
+  { big: '15 sources', small: 'Every number traced', href: 'sources' },
+];
+
+const beats = [
+  { id: 'heat', big: `${story.placePeak}°F`, small: `${story.place}, ${clockLabel(story.peak)}` },
+  { id: 'walk', big: `${story.walk2Before} ft`, small: 'to the nearest shade' },
+  { id: 'sail', big: `${story.sailCooler}°F cooler`, small: `one sail from ${dollars(story.sailCost.low)}` },
+  { id: 'plant', big: `${story.trees.length} trees`, small: `from ${dollars(story.cost.low)}, ${story.years} years` },
+  { id: 'time', big: `${story.earlyTemp}°F`, small: `same place, ${clockLabel(story.early)}` },
+];
+---
+
+<Base title="Shady" description="A 3D heat model of a real school. Scroll through one hot day, then plan the shade yourself." overlay>
+  <div class="film" data-mode="still">
+    <div class="film-stage" aria-hidden="true">
+      <img class="film-poster" src={`${base}beats/open.jpg`} alt="" width="1600" height="1000" />
+      <Film client:only="react" base={base} story={story} />
+    </div>
+    <div class="film-beats">
+      <section class="beat beat-open">
+        <img class="beat-still" src={`${base}beats/open.jpg`} alt="" width="1600" height="1000" />
+        <h1 class="max-w-[9ch] text-[length:var(--fs-hero)]">Shade your school.</h1>
+      </section>
+      {
+        beats.map((beat) => (
+          <section class="beat">
+            <img class="beat-still" src={`${base}beats/${beat.id}.jpg`} alt="" width="1600" height="1000" loading="lazy" />
+            <div class="beat-words">
+              <h2 class="beat-big">
+                <span>{beat.big}</span>
+              </h2>
+              <p class="beat-small">
+                <span>{beat.small}</span>
+              </p>
+            </div>
+          </section>
+        ))
+      }
+      <section class="beat">
+        <img class="beat-still" src={`${base}beats/yours.jpg`} alt="" width="1600" height="1000" loading="lazy" />
+        <div class="beat-words">
+          <h2 class="beat-plain">Now yours</h2>
+          <div class="flex flex-wrap gap-3">
+            <a class="pill" href={`${base}yard`}>Open the yard</a>
+            <FindSchool client:idle base={base} />
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <section class="shell mx-auto flex max-w-[1180px] flex-col gap-14 pb-10 pt-20">
+    <ul class="m-0 grid list-none gap-x-10 p-0 md:grid-cols-3">
+      {
+        more.map((item) => (
+          <li class="border-t border-rule">
+            <a href={`${base}${item.href}`} class="group flex min-h-24 flex-col justify-center gap-1 py-5 no-underline">
+              <span class="data text-[clamp(1.75rem,3vw,2.5rem)] font-semibold leading-none">{item.big}</span>
+              <span class="text-lg font-medium text-soft underline-offset-4 group-hover:text-oak group-hover:underline">{item.small}</span>
+            </a>
+          </li>
+        ))
+      }
+    </ul>
+    <footer class="flex flex-wrap items-center justify-between gap-x-8 gap-y-5 border-t border-rule pt-6">
+      <a class="wordmark inline-flex min-h-11 items-center" href={base}>shady</a>
+      <Detail client:idle />
+      <a href="https://www.openstreetmap.org/copyright" class="inline-flex min-h-11 items-center text-base text-soft underline underline-offset-4 hover:text-oak" rel="noreferrer">Map data from OpenStreetMap</a>
+    </footer>
+  </section>
+</Base>
