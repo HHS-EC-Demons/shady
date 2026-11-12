@@ -5,6 +5,7 @@ import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { SURFACES, type Patch, type Strip, type Surface } from '@/engine/campus';
 import { insideRing, ringArea, ringDistance, type Point, type Ring } from '@/engine/geometry';
 import { rampTable } from '@/engine/heat';
+import { makeGrid, polygonSpans } from '@/engine/raster';
 import type { Yard } from './controller';
 
 const SHADOW = '#2b4450';
@@ -25,6 +26,18 @@ const STALL = 2.75;
 const STALL_DEPTH = 5.5;
 const STALL_LIMIT = 1500;
 const MASK_LIMIT = 2048;
+const CONTACT_LIMIT = 1024;
+const CONTACT_REACH = 2.5;
+const CONTACT_PASSES = 3;
+const SPORTS = /field|pitch|diamond/i;
+const BEVEL = 0.35;
+const STEP = 0.5;
+const GROUP = 3;
+const STRIDE = 16;
+const PROBE = 0.3;
+const BUCKET = 16;
+const BEND = Math.PI / 8;
+const RELIEF: Partial<Record<Surface, number>> = { grass: 1, soil: 1, concrete: 1, court: 1, track: 1, turf: 1, asphalt: -1 };
 
 const VERTEX = `
 attribute float aRise;
@@ -32,6 +45,10 @@ attribute float aPaved;
 attribute float aLine;
 attribute vec2 aOut;
 attribute float aHalf;
+attribute float aKind;
+attribute vec2 aAlong;
+attribute float aPhase;
+attribute vec3 aBevel;
 uniform vec4 uGrid;
 uniform vec2 uMiddle;
 uniform float uPixel;
@@ -39,6 +56,10 @@ varying vec2 vUv;
 varying float vRise;
 varying float vPaved;
 varying float vLine;
+varying vec2 vWorld;
+varying float vKind;
+varying vec3 vAlong;
+varying vec3 vBevel;
 void main() {
   vec4 world = modelMatrix * vec4(position, 1.0);
   float shade = 0.0;
@@ -53,6 +74,10 @@ void main() {
   vRise = aRise;
   vPaved = aPaved;
   vLine = shade;
+  vWorld = world.xz;
+  vKind = aKind;
+  vAlong = vec3(aAlong, dot(world.xz, aAlong) - aPhase);
+  vBevel = aBevel;
   gl_Position = projectionMatrix * viewMatrix * world;
 }
 `;
@@ -61,21 +86,110 @@ const FRAGMENT = `
 uniform sampler2D uHeat;
 uniform sampler2D uHome;
 uniform sampler2D uRamp;
+uniform sampler2D uContact;
 uniform float uAir;
 uniform vec3 uPaper;
 uniform vec3 uRoad;
+uniform vec3 uSun;
 varying vec2 vUv;
 varying float vRise;
 varying float vPaved;
 varying float vLine;
+varying vec2 vWorld;
+varying float vKind;
+varying vec3 vAlong;
+varying vec3 vBevel;
+
+float hash(vec2 p) {
+  vec3 q = fract(vec3(p.xyx) * 0.1031);
+  q += dot(q, q.yzx + 33.33);
+  return fract((q.x + q.y) * q.z);
+}
+
+float noise(vec2 p) {
+  vec2 i = floor(p);
+  vec2 f = p - i;
+  vec2 u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+  float a = hash(i);
+  float b = hash(i + vec2(1.0, 0.0));
+  float c = hash(i + vec2(0.0, 1.0));
+  float d = hash(i + vec2(1.0, 1.0));
+  return mix(mix(a, b, u.x), mix(c, d, u.x), u.y) * 2.0 - 1.0;
+}
+
+float keep(float size, float pixel) {
+  return 1.0 - smoothstep(size * 0.15, size * 0.5, pixel);
+}
+
+float joint(float coord, float pixel) {
+  float d = abs(fract(coord / 1.5 + 0.5) - 0.5) * 1.5;
+  float w = max(pixel, 0.001);
+  return max(min(0.015, d + 0.5 * w) - max(-0.015, d - 0.5 * w), 0.0) / w;
+}
+
+float mown(vec2 p, float pixel) {
+  float stripe = smoothstep(-0.3, 0.3, sin(3.14159265 * vAlong.z / 4.572)) * 2.0 - 1.0;
+  return 0.035 * stripe + 0.02 * noise(p / 0.1) * keep(0.1, pixel);
+}
+
+float grain(vec2 p, vec2 fw, float pixel) {
+  float kind = floor(vKind + 0.5);
+  bool aligned = dot(vAlong.xy, vAlong.xy) > 0.25;
+  vec2 r = vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y);
+  if (kind < 0.5) {
+    if (aligned) return mown(p, pixel);
+    return 0.015 * noise(p / 0.7) * keep(0.7, pixel) + 0.035 * noise(r / 5.0 + 19.7) * keep(5.0, pixel);
+  }
+  if (kind < 1.5) {
+    return 0.03 * noise(p / 0.18) * keep(0.18, pixel) - 0.03 * smoothstep(-0.2, 0.7, noise(r / 3.5 + 7.3)) * keep(3.5, pixel);
+  }
+  if (kind < 2.5) {
+    float seam = max(joint(p.x, fw.x), joint(p.y, fw.y));
+    return -0.07 * seam * keep(1.5, pixel) + 0.02 * noise(p / 0.8 + 3.1) * keep(0.8, pixel);
+  }
+  if (kind < 3.5) return mown(p, pixel);
+  if (kind < 4.5) {
+    vec2 q = aligned ? vec2(dot(p, vAlong.xy) / 9.0, dot(p, vec2(-vAlong.y, vAlong.x)) / 3.0) : p / 6.0;
+    return 0.015 * noise(q + 11.0);
+  }
+  if (kind < 5.5) return 0.03 * noise(p / 0.12) * keep(0.12, pixel);
+  if (kind < 6.5) {
+    return 0.025 * noise(p / 0.4 + 5.0) * keep(0.4, pixel) + 0.035 * noise(p / 2.0 + 13.0) * keep(2.0, pixel);
+  }
+  return 0.0;
+}
+
+float relief(float pixel) {
+  float spread = dot(vBevel.xz, vBevel.xz);
+  if (spread < 0.04) return 0.0;
+  vec2 outward = vBevel.xz * inversesqrt(spread) * sign(vBevel.y);
+  vec3 tilted = vec3(outward.x * 0.6428, 0.7660, outward.y * 0.6428);
+  float level = max(uSun.y, 0.02);
+  float change = clamp((max(dot(tilted, uSun), 0.0) / level - 1.0) * 2.2, -1.0, 1.0);
+  float profile = smoothstep(0.0, 0.6, abs(vBevel.y));
+  float low = smoothstep(0.02, 0.22, uSun.y);
+  float far = 1.0 - smoothstep(${(BEVEL / 7).toFixed(4)}, ${(BEVEL / 2).toFixed(4)}, pixel);
+  return 0.14 * change * profile * low * far;
+}
+
 void main() {
   float home = smoothstep(0.35, 0.65, texture2D(uHome, vUv).r);
   float degrees = uAir + vRise * texture2D(uHeat, vUv).r * 1.275;
   float place = clamp((degrees - 30.0) * 1.25 / 255.0, 0.0, 1.0);
   vec3 hot = texture2D(uRamp, vec2(place, 0.5)).rgb;
   hot = mix(hot, vec3(0.98, 0.985, 0.97), vLine * home * 0.55);
+  vec2 fw = fwidth(vWorld);
+  float pixel = max(fw.x, fw.y);
+  float near = 1.0 - smoothstep(0.08, 0.25, pixel);
+  if (near > 0.0 && home > 0.0) {
+    float tone = clamp(1.0 + grain(vWorld, fw, pixel) * near, 0.9, 1.06);
+    hot *= pow(tone * (1.0 + relief(pixel)), 2.2);
+  }
   vec3 away = mix(uPaper, uRoad, vPaved);
-  gl_FragColor = vec4(mix(away, hot, home), 1.0);
+  vec3 colour = mix(away, hot, home);
+  float contact = smoothstep(0.03, 0.55, texture2D(uContact, vUv).r);
+  colour = mix(colour, colour * vec3(0.80, 0.86, 0.88), 0.30 * contact);
+  gl_FragColor = vec4(colour, 1.0);
   #include <colorspace_fragment>
 }
 `;
@@ -164,29 +278,71 @@ function joins(points: Point[], closed: boolean): Point[] {
   return result;
 }
 
+function signedArea(points: Point[]): number {
+  let sum = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const [ax, ay] = points[i];
+    const [bx, by] = points[(i + 1) % points.length];
+    sum += ax * by - bx * ay;
+  }
+  return sum / 2;
+}
+
+type Layer = { surface: Surface; patch?: Patch; strip?: Strip };
+type Cover = { kind: number; minX: number; minY: number; maxX: number; maxY: number; ring: Point[] | null; ax: number; ay: number; bx: number; by: number; radius: number };
+
+function mown(patch: Patch): boolean {
+  return patch.surface === 'turf' || patch.surface === 'court' || (patch.surface === 'grass' && SPORTS.test(patch.label ?? ''));
+}
+
 function build(yard: Yard): THREE.BufferGeometry {
   const grid = yard.ground.grid;
   const [middleX, middleY] = yard.middle;
-  const position: number[] = [];
-  const rises: number[] = [];
-  const paved: number[] = [];
-  const lines: number[] = [];
-  const outs: number[] = [];
-  const halves: number[] = [];
+  let values = new Float32Array(STRIDE * 65536);
+  let used = 0;
   let rise = 0;
   let hard = 0;
+  let kind = 0;
+  let alongX = 0;
+  let alongZ = 0;
+  let phase = 0;
 
-  const use = (surface: Surface) => {
+  const use = (surface: Surface, patch?: Patch) => {
     rise = SURFACES[surface].rise;
     hard = surface === 'asphalt' || surface === 'concrete' ? 1 : 0;
+    kind = SURFACES[surface].code;
+    alongX = 0;
+    alongZ = 0;
+    phase = 0;
+    if (patch && mown(patch)) {
+      const box = boxAround(tidy(patch.ring).points);
+      alongX = box.ux;
+      alongZ = -box.uy;
+      phase = (box.cx - middleX) * alongX + (middleY - box.cy) * alongZ;
+    }
   };
-  const vertex = (x: number, y: number, ox: number, oy: number, half: number, mark: number) => {
-    position.push(x - middleX, 0, middleY - y);
-    rises.push(rise);
-    paved.push(hard);
-    lines.push(mark);
-    outs.push(ox, -oy);
-    halves.push(half);
+  const vertex = (x: number, y: number, ox: number, oy: number, half: number, mark: number, nx = 0, ny = 0, lift = 0) => {
+    if (used + STRIDE > values.length) {
+      const grown = new Float32Array(values.length * 2);
+      grown.set(values);
+      values = grown;
+    }
+    values[used] = x - middleX;
+    values[used + 2] = middleY - y;
+    values[used + 3] = rise;
+    values[used + 4] = hard;
+    values[used + 5] = mark;
+    values[used + 6] = ox;
+    values[used + 7] = -oy;
+    values[used + 8] = half;
+    values[used + 9] = kind;
+    values[used + 10] = alongX;
+    values[used + 11] = alongZ;
+    values[used + 12] = phase;
+    values[used + 13] = nx;
+    values[used + 14] = lift;
+    values[used + 15] = -ny;
+    used += STRIDE;
   };
   const triangle = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number) => {
     vertex(ax, ay, 0, 0, 0, 0);
@@ -335,36 +491,210 @@ function build(yard: Yard): THREE.BufferGeometry {
   const soft = (surface: Surface) => surface === 'grass' || surface === 'soil';
   const paving = (surface: Surface) => surface === 'asphalt' || surface === 'concrete';
   const { patches, strips } = yard.campus;
-
-  use('grass');
   const right = grid.minX + grid.cols * grid.cell;
   const top = grid.minY + grid.rows * grid.cell;
+
+  const layers: Layer[] = [
+    ...patches.filter((patch) => soft(patch.surface)).map((patch) => ({ surface: patch.surface, patch })),
+    ...strips.filter((strip) => strip.surface !== 'track').map((strip) => ({ surface: strip.surface, strip })),
+    ...patches.filter((patch) => paving(patch.surface)).map((patch) => ({ surface: patch.surface, patch })),
+    ...strips.filter((strip) => strip.surface === 'track').map((strip) => ({ surface: strip.surface, strip })),
+    ...patches.filter((patch) => !soft(patch.surface) && !paving(patch.surface)).map((patch) => ({ surface: patch.surface, patch })),
+  ];
+
+  const covers: Cover[] = [];
+  const buckets = new Map<number, number[]>();
+  const slot = (value: number) => Math.floor(value / BUCKET) + 8192;
+  const cover = (item: Cover) => {
+    const index = covers.length;
+    covers.push(item);
+    for (let gx = slot(item.minX); gx <= slot(item.maxX); gx += 1) {
+      for (let gy = slot(item.minY); gy <= slot(item.maxY); gy += 1) {
+        const key = gx * 16384 + gy;
+        const list = buckets.get(key);
+        if (list) list.push(index);
+        else buckets.set(key, [index]);
+      }
+    }
+  };
+  for (const layer of layers) {
+    const code = SURFACES[layer.surface].code;
+    if (layer.patch) {
+      const { points } = tidy(layer.patch.ring);
+      if (points.length < 3 || ringArea(points) < 1e-6) continue;
+      let minX = Infinity;
+      let minY = Infinity;
+      let maxX = -Infinity;
+      let maxY = -Infinity;
+      for (const [x, y] of points) {
+        minX = Math.min(minX, x);
+        minY = Math.min(minY, y);
+        maxX = Math.max(maxX, x);
+        maxY = Math.max(maxY, y);
+      }
+      cover({ kind: code, minX, minY, maxX, maxY, ring: points, ax: 0, ay: 0, bx: 0, by: 0, radius: 0 });
+    } else if (layer.strip && layer.strip.width > 0) {
+      const radius = layer.strip.width / 2;
+      const line = layer.strip.line;
+      for (let i = 0; i + 1 < line.length; i += 1) {
+        const [ax, ay] = line[i];
+        const [bx, by] = line[i + 1];
+        cover({ kind: code, minX: Math.min(ax, bx) - radius, minY: Math.min(ay, by) - radius, maxX: Math.max(ax, bx) + radius, maxY: Math.max(ay, by) + radius, ring: null, ax, ay, bx, by, radius });
+      }
+    }
+  }
+  const onStrip = (item: Cover, x: number, y: number) => {
+    const dx = item.bx - item.ax;
+    const dy = item.by - item.ay;
+    const length = dx * dx + dy * dy;
+    const share = length > 0 ? Math.min(1, Math.max(0, ((x - item.ax) * dx + (y - item.ay) * dy) / length)) : 0;
+    const ex = x - item.ax - dx * share;
+    const ey = y - item.ay - dy * share;
+    return ex * ex + ey * ey <= item.radius * item.radius;
+  };
+  const topKind = (x: number, y: number): number => {
+    const list = buckets.get(slot(x) * 16384 + slot(y));
+    if (list) {
+      for (let i = list.length - 1; i >= 0; i -= 1) {
+        const item = covers[list[i]];
+        if (x < item.minX || x > item.maxX || y < item.minY || y > item.maxY) continue;
+        if (item.ring ? insideRing(item.ring, x, y) : onStrip(item, x, y)) return item.kind;
+      }
+    }
+    return x >= grid.minX && x <= right && y >= grid.minY && y <= top ? SURFACES.grass.code : -1;
+  };
+
+  const rim = (ax: number, ay: number, bx: number, by: number, ix: number, iy: number, jx: number, jy: number, nx: number, ny: number, lift: number) => {
+    const length = Math.hypot(bx - ax, by - ay);
+    if (length < 1e-3) return;
+    const count = Math.max(1, Math.ceil(length / STEP));
+    const piece = (from: number, to: number) => {
+      const oax = ax + (bx - ax) * from;
+      const oay = ay + (by - ay) * from;
+      const obx = ax + (bx - ax) * to;
+      const oby = ay + (by - ay) * to;
+      const iax = ix + (jx - ix) * from;
+      const iay = iy + (jy - iy) * from;
+      const ibx = ix + (jx - ix) * to;
+      const iby = iy + (jy - iy) * to;
+      vertex(oax, oay, 0, 0, 0, 0, nx, ny, lift);
+      vertex(obx, oby, 0, 0, 0, 0, nx, ny, lift);
+      vertex(ibx, iby, 0, 0, 0, 0, nx, ny, 0);
+      vertex(oax, oay, 0, 0, 0, 0, nx, ny, lift);
+      vertex(ibx, iby, 0, 0, 0, 0, nx, ny, 0);
+      vertex(iax, iay, 0, 0, 0, 0, nx, ny, 0);
+    };
+    const probe = (step: number) => {
+      const share = (step + 0.5) / count;
+      return topKind(ax + (bx - ax) * share + nx * PROBE, ay + (by - ay) * share + ny * PROBE) !== kind;
+    };
+    const groups = Math.ceil(count / GROUP);
+    const coarse: boolean[] = [];
+    for (let group = 0; group < groups; group += 1) coarse.push(probe(Math.min(count - 1, group * GROUP + (GROUP >> 1))));
+    let start = -1;
+    const mark = (step: number, show: boolean) => {
+      if (show && start < 0) start = step;
+      if (!show && start >= 0) {
+        piece(start / count, step / count);
+        start = -1;
+      }
+    };
+    for (let group = 0; group < groups; group += 1) {
+      const first = group * GROUP;
+      const settled = (group === 0 || coarse[group - 1] === coarse[group]) && (group === groups - 1 || coarse[group + 1] === coarse[group]);
+      if (settled) mark(first, coarse[group]);
+      else for (let step = first; step < Math.min(count, first + GROUP); step += 1) mark(step, probe(step));
+    }
+    mark(count, false);
+  };
+
+  const arc = (x: number, y: number, fromX: number, fromY: number, sweep: number, outer: number, inner: number, lift: number) => {
+    const steps = Math.max(1, Math.ceil(Math.abs(sweep) / BEND));
+    const start = Math.atan2(fromY, fromX);
+    for (let step = 0; step < steps; step += 1) {
+      const a = start + (sweep * step) / steps;
+      const b = start + (sweep * (step + 1)) / steps;
+      const middle = (a + b) / 2;
+      if (topKind(x + Math.cos(middle) * (outer + PROBE), y + Math.sin(middle) * (outer + PROBE)) === kind) continue;
+      const ca = Math.cos(a);
+      const sa = Math.sin(a);
+      const cb = Math.cos(b);
+      const sb = Math.sin(b);
+      vertex(x + ca * outer, y + sa * outer, 0, 0, 0, 0, ca, sa, lift);
+      vertex(x + cb * outer, y + sb * outer, 0, 0, 0, 0, cb, sb, lift);
+      vertex(x + cb * inner, y + sb * inner, 0, 0, 0, 0, cb, sb, 0);
+      vertex(x + ca * outer, y + sa * outer, 0, 0, 0, 0, ca, sa, lift);
+      vertex(x + cb * inner, y + sb * inner, 0, 0, 0, 0, cb, sb, 0);
+      vertex(x + ca * inner, y + sa * inner, 0, 0, 0, 0, ca, sa, 0);
+    }
+  };
+
+  const patchRims = (patch: Patch) => {
+    const lift = RELIEF[patch.surface];
+    if (!lift) return;
+    const { points } = tidy(patch.ring);
+    if (points.length < 3 || ringArea(points) < 1e-6) return;
+    const flip = signedArea(points) > 0 ? -1 : 1;
+    const miter = joins(points, true);
+    const count = points.length;
+    for (let i = 0; i < count; i += 1) {
+      const j = (i + 1) % count;
+      const [ax, ay] = points[i];
+      const [bx, by] = points[j];
+      const [nx, ny] = normal(points[i], points[j]);
+      if (nx === 0 && ny === 0) continue;
+      const ix = ax - miter[i][0] * flip * BEVEL;
+      const iy = ay - miter[i][1] * flip * BEVEL;
+      const jx = bx - miter[j][0] * flip * BEVEL;
+      const jy = by - miter[j][1] * flip * BEVEL;
+      rim(ax, ay, bx, by, ix, iy, jx, jy, nx * flip, ny * flip, lift);
+    }
+  };
+
+  const stripRims = (strip: Strip) => {
+    const lift = RELIEF[strip.surface];
+    const points = strip.line;
+    if (!lift || points.length < 2 || strip.width <= 0) return;
+    const outer = strip.width / 2;
+    const inner = outer - Math.min(BEVEL, outer * 0.5);
+    const runs: { from: number; nx: number; ny: number }[] = [];
+    for (let i = 0; i + 1 < points.length; i += 1) {
+      const [nx, ny] = normal(points[i], points[i + 1]);
+      if (nx === 0 && ny === 0) continue;
+      runs.push({ from: i, nx, ny });
+      const [ax, ay] = points[i];
+      const [bx, by] = points[i + 1];
+      for (const side of [1, -1]) {
+        const ox = nx * side;
+        const oy = ny * side;
+        rim(ax + ox * outer, ay + oy * outer, bx + ox * outer, by + oy * outer, ax + ox * inner, ay + oy * inner, bx + ox * inner, by + oy * inner, ox, oy, lift);
+      }
+    }
+    const turn = (before: { nx: number; ny: number }, after: { nx: number; ny: number }, at: Point) => {
+      const cross = before.nx * after.ny - before.ny * after.nx;
+      const sweep = Math.atan2(cross, before.nx * after.nx + before.ny * after.ny);
+      if (Math.abs(sweep) < 0.01) return;
+      const side = cross > 0 ? -1 : 1;
+      arc(at[0], at[1], before.nx * side, before.ny * side, sweep, outer, inner, lift);
+    };
+    for (let k = 1; k < runs.length; k += 1) turn(runs[k - 1], runs[k], points[runs[k].from]);
+    const first = points[0];
+    const last = points[points.length - 1];
+    if (runs.length > 1 && Math.hypot(first[0] - last[0], first[1] - last[1]) <= 1e-3) turn(runs[runs.length - 1], runs[0], first);
+  };
+
+  use('grass');
   triangle(grid.minX, grid.minY, right, grid.minY, right, top);
   triangle(grid.minX, grid.minY, right, top, grid.minX, top);
-  for (const patch of patches) {
-    if (!soft(patch.surface)) continue;
-    use(patch.surface);
-    fill(patch.ring);
-  }
-  for (const strip of strips) {
-    if (strip.surface === 'track') continue;
-    use(strip.surface);
-    band(strip);
-  }
-  for (const patch of patches) {
-    if (!paving(patch.surface)) continue;
-    use(patch.surface);
-    fill(patch.ring);
-  }
-  for (const strip of strips) {
-    if (strip.surface !== 'track') continue;
-    use(strip.surface);
-    band(strip);
-  }
-  for (const patch of patches) {
-    if (soft(patch.surface) || paving(patch.surface)) continue;
-    use(patch.surface);
-    fill(patch.ring);
+  for (const layer of layers) {
+    use(layer.surface, layer.patch);
+    if (layer.patch) {
+      fill(layer.patch.ring);
+      patchRims(layer.patch);
+    } else if (layer.strip) {
+      band(layer.strip);
+      stripRims(layer.strip);
+    }
   }
   for (const strip of strips) {
     if (strip.surface !== 'track') continue;
@@ -372,19 +702,27 @@ function build(yard: Yard): THREE.BufferGeometry {
     lanes(strip);
   }
   for (const patch of patches) {
-    use(patch.surface);
+    use(patch.surface, patch);
     if (patch.surface === 'court') court(patch);
     else if (FIELD_SPORTS.includes(patch.label ?? '')) field(patch);
     else if (patch.label === 'Parking lot') parking(patch);
   }
 
   const geometry = new THREE.BufferGeometry();
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(position, 3));
-  geometry.setAttribute('aRise', new THREE.Float32BufferAttribute(rises, 1));
-  geometry.setAttribute('aPaved', new THREE.Float32BufferAttribute(paved, 1));
-  geometry.setAttribute('aLine', new THREE.Float32BufferAttribute(lines, 1));
-  geometry.setAttribute('aOut', new THREE.Float32BufferAttribute(outs, 2));
-  geometry.setAttribute('aHalf', new THREE.Float32BufferAttribute(halves, 1));
+  const packed = new THREE.InterleavedBuffer(values.slice(0, used), STRIDE);
+  const layout: [string, number, number][] = [
+    ['position', 3, 0],
+    ['aRise', 1, 3],
+    ['aPaved', 1, 4],
+    ['aLine', 1, 5],
+    ['aOut', 2, 6],
+    ['aHalf', 1, 8],
+    ['aKind', 1, 9],
+    ['aAlong', 2, 10],
+    ['aPhase', 1, 12],
+    ['aBevel', 3, 13],
+  ];
+  for (const [name, size, offset] of layout) geometry.setAttribute(name, new THREE.InterleavedBufferAttribute(packed, size, offset));
   geometry.computeBoundingSphere();
   return geometry;
 }
@@ -419,6 +757,64 @@ function homeMask(yard: Yard, limit: number): THREE.CanvasTexture {
   return texture;
 }
 
+function boxBlur(source: Float32Array, target: Float32Array, cols: number, rows: number, radius: number, across: boolean): void {
+  const lines = across ? rows : cols;
+  const length = across ? cols : rows;
+  const step = across ? 1 : cols;
+  const jump = across ? cols : 1;
+  const width = radius * 2 + 1;
+  for (let line = 0; line < lines; line += 1) {
+    const start = line * jump;
+    let sum = 0;
+    for (let at = 0; at <= Math.min(radius, length - 1); at += 1) sum += source[start + at * step];
+    for (let at = 0; at < length; at += 1) {
+      target[start + at * step] = sum / width;
+      const enter = at + radius + 1;
+      const leave = at - radius;
+      if (enter < length) sum += source[start + enter * step];
+      if (leave >= 0) sum -= source[start + leave * step];
+    }
+  }
+}
+
+function contactMask(yard: Yard): THREE.DataTexture {
+  const heat = yard.ground.grid;
+  const width = heat.cols * heat.cell;
+  const depth = heat.rows * heat.cell;
+  const cell = Math.max(1, Math.max(width, depth) / CONTACT_LIMIT);
+  const shape = makeGrid({ minX: heat.minX, minY: heat.minY, maxX: heat.minX + width, maxY: heat.minY + depth }, cell);
+  const grid = { ...shape, cols: Math.min(CONTACT_LIMIT, shape.cols), rows: Math.min(CONTACT_LIMIT, shape.rows) };
+  const { cols, rows } = grid;
+  const field = new Float32Array(cols * rows);
+  const spare = new Float32Array(cols * rows);
+  for (const block of yard.campus.blocks) {
+    polygonSpans(grid, block.ring, (row, from, to) => field.fill(255, row * cols + from, row * cols + to + 1));
+  }
+  const radius = Math.max(1, Math.round(CONTACT_REACH / cell));
+  for (let pass = 0; pass < CONTACT_PASSES; pass += 1) {
+    boxBlur(field, spare, cols, rows, radius, true);
+    boxBlur(spare, field, cols, rows, radius, false);
+  }
+  const fade = radius * CONTACT_PASSES;
+  const data = new Uint8Array(cols * rows);
+  for (let row = 0; row < rows; row += 1) {
+    const edgeRow = Math.min(row, rows - 1 - row);
+    for (let col = 0; col < cols; col += 1) {
+      const edge = Math.min(edgeRow, col, cols - 1 - col);
+      const keep = Math.min(1, edge / fade);
+      data[row * cols + col] = Math.round(Math.min(255, field[row * cols + col] * keep));
+    }
+  }
+  const texture = new THREE.DataTexture(data, cols, rows, THREE.RedFormat, THREE.UnsignedByteType);
+  texture.colorSpace = THREE.NoColorSpace;
+  texture.unpackAlignment = 1;
+  texture.magFilter = THREE.LinearFilter;
+  texture.minFilter = THREE.LinearFilter;
+  texture.generateMipmaps = false;
+  texture.needsUpdate = true;
+  return texture;
+}
+
 function groundPoint(event: ThreeEvent<PointerEvent>): THREE.Vector3 | null {
   return event.ray.intersectPlane(FLOOR, spot);
 }
@@ -438,6 +834,8 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
   useEffect(() => () => heat.texture.dispose(), [heat]);
   const geometry = useMemo(() => build(yard), [yard]);
   useEffect(() => () => geometry.dispose(), [geometry]);
+  const contact = useMemo(() => contactMask(yard), [yard]);
+  useEffect(() => () => contact.dispose(), [contact]);
   const material = useMemo(() => {
     const ramp = new THREE.DataTexture(rampTable(), 256, 1, THREE.RGBAFormat, THREE.UnsignedByteType);
     ramp.colorSpace = THREE.SRGBColorSpace;
@@ -454,28 +852,32 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
         uHeat: { value: heat.texture },
         uHome: { value: homeMask(yard, texture) },
         uRamp: { value: ramp },
+        uContact: { value: contact },
         uAir: { value: 90 },
         uPaper: { value: new THREE.Color(PAPER) },
         uRoad: { value: new THREE.Color(ROAD) },
         uGrid: { value: new THREE.Vector4(grid.minX, grid.minY, width, depth) },
         uMiddle: { value: new THREE.Vector2(yard.middle[0], yard.middle[1]) },
         uPixel: { value: 0.001 },
+        uSun: { value: new THREE.Vector3(0, 1, 0) },
       },
     });
-  }, [yard, grid, heat, texture, width, depth]);
+  }, [yard, grid, heat, contact, texture, width, depth]);
   useEffect(
     () => () => {
       for (const uniform of Object.values(material.uniforms)) {
-        if (uniform.value instanceof THREE.Texture && uniform.value !== heat.texture) uniform.value.dispose();
+        if (uniform.value instanceof THREE.Texture && uniform.value !== heat.texture && uniform.value !== contact) uniform.value.dispose();
       }
       material.dispose();
     },
-    [material, heat],
+    [material, heat, contact],
   );
   const seen = useRef(-1);
   const drag = useRef<{ kind: 'tree' | 'sail'; id: number } | null>(null);
   const press = useRef<{ x: number; y: number; at: number } | null>(null);
   const owner = useRef<THREE.ShaderMaterial | null>(null);
+  const sunMinute = useRef(Number.NaN);
+  const sunOwner = useRef<THREE.ShaderMaterial | null>(null);
   const controls = useThree((state) => state.controls) as OrbitControlsImpl | null;
 
   useFrame((state) => {
@@ -483,6 +885,12 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
     const fov = camera.isPerspectiveCamera ? camera.fov : 30;
     const zoom = camera.isPerspectiveCamera ? camera.zoom : 1;
     material.uniforms.uPixel.value = (2 * Math.tan((fov * Math.PI) / 360)) / Math.max(1, state.gl.domElement.height * zoom);
+    if (sunMinute.current !== yard.minute || sunOwner.current !== material) {
+      sunMinute.current = yard.minute;
+      sunOwner.current = material;
+      const ray = yard.sun();
+      (material.uniforms.uSun.value as THREE.Vector3).set(ray.x, ray.z, -ray.y);
+    }
     if (seen.current === yard.frame && owner.current === material) return;
     seen.current = yard.frame;
     owner.current = material;
