@@ -1,0 +1,719 @@
+import { Edges, Line, OrbitControls } from '@react-three/drei';
+import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
+import { animate } from 'motion/react';
+import { useEffect, useMemo, useRef, useSyncExternalStore, type RefObject } from 'react';
+import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
+import type { Block } from '@/engine/campus';
+import { CANOPY_FLATTEN, type Sail } from '@/engine/shade';
+import { treeHeight, treeRadius, type PlanTree, type Yard } from './controller';
+import { Ground } from './ground';
+import { buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint } from './models';
+
+const INK = '#12261c';
+const LEAF = '#2f6243';
+const WALL = '#eceeea';
+const NEIGHBORS = ['#e4ddd5', '#d6dee0', '#dfe3d4', '#e7ddd0'].map((hex) => new THREE.Color(hex));
+const PAPER = '#e3eaec';
+const HEAT = '#dd5a34';
+const CLOTH = '#8fb1ab';
+const CLOTH_CHOSEN = '#a9c6c1';
+const STEEL = '#56655f';
+const SKY = '#f1f7fb';
+const BOUNCE = '#d2cabb';
+const SUN_LOW = new THREE.Color('#ffe6c8');
+const SUN_HIGH = new THREE.Color('#fff7ec');
+const MAPPED_LIFT = 1.12;
+const FLOOR = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+const spot = new THREE.Vector3();
+
+function useYard(yard: Yard): number {
+  return useSyncExternalStore(yard.subscribe, yard.snapshot, yard.snapshot);
+}
+
+function groundPoint(event: ThreeEvent<PointerEvent>): THREE.Vector3 | null {
+  return event.ray.intersectPlane(FLOOR, spot);
+}
+
+export { Ground } from './ground';
+
+function prism(yard: Yard, block: Block, height: number): THREE.ExtrudeGeometry {
+  const shape = new THREE.Shape(block.ring.map(([x, y]) => new THREE.Vector2(x - yard.middle[0], y - yard.middle[1])));
+  const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
+  geometry.rotateX(-Math.PI / 2);
+  return geometry;
+}
+
+export function Blocks({ yard }: { yard: Yard }) {
+  const { home, away } = useMemo(() => {
+    const mine = yard.campus.blocks
+      .map((block, index) => ({ block, index }))
+      .filter((item) => item.block.home)
+      .map((item) => ({ ...item, geometry: prism(yard, item.block, item.block.height) }));
+    const others = yard.campus.blocks
+      .map((block, index) => ({ block, index }))
+      .filter((item) => !item.block.home)
+      .map(({ block, index }) => {
+        const geometry = prism(yard, block, block.height);
+        const tint = NEIGHBORS[index % NEIGHBORS.length];
+        const count = geometry.getAttribute('position').count;
+        const colors = new Float32Array(count * 3);
+        for (let at = 0; at < count; at += 1) {
+          colors[at * 3] = tint.r;
+          colors[at * 3 + 1] = tint.g;
+          colors[at * 3 + 2] = tint.b;
+        }
+        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+        return geometry;
+      });
+    const merged = others.length > 0 ? mergeGeometries(others) : null;
+    for (const other of others) other.dispose();
+    return { home: mine, away: merged };
+  }, [yard]);
+  useEffect(
+    () => () => {
+      for (const item of home) item.geometry.dispose();
+      away?.dispose();
+    },
+    [home, away],
+  );
+  const walls = useMemo(() => {
+    const mine = new THREE.MeshStandardMaterial({ color: WALL, roughness: 0.92, metalness: 0 });
+    const others = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 1, metalness: 0 });
+    enhanceWalls(mine);
+    enhanceWalls(others);
+    return { mine, others };
+  }, []);
+  useEffect(
+    () => () => {
+      walls.mine.dispose();
+      walls.others.dispose();
+    },
+    [walls],
+  );
+  const units = useMemo(
+    () =>
+      buildRoofUnits(
+        yard.campus.blocks.filter((block) => block.home),
+        (x, y) => yard.toScene(x, y),
+      ),
+    [yard],
+  );
+  useEffect(() => () => units?.dispose(), [units]);
+  const press = useRef<{ x: number; y: number; at: number; index: number } | null>(null);
+  return (
+    <group>
+      {home.map(({ block, geometry, index }) => (
+        <mesh
+          key={`${block.id} ${index}`}
+          geometry={geometry}
+          material={walls.mine}
+          castShadow
+          receiveShadow
+          onPointerDown={(event) => {
+            if (event.button !== 0 || yard.tool !== 'look') return;
+            event.stopPropagation();
+            press.current = { x: event.clientX, y: event.clientY, at: performance.now(), index };
+          }}
+          onPointerUp={(event) => {
+            const pressed = press.current;
+            press.current = null;
+            if (!pressed || pressed.index !== index || yard.tool !== 'look') return;
+            event.stopPropagation();
+            if (Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) < 6 && performance.now() - pressed.at < 450) yard.pickBlock(index);
+          }}
+        >
+          <Edges threshold={20} color="#7d8e88" />
+        </mesh>
+      ))}
+      {away && <mesh geometry={away} material={walls.others} castShadow receiveShadow />}
+      {units && (
+        <mesh geometry={units} castShadow receiveShadow raycast={() => null}>
+          <meshStandardMaterial color="#dfe5e4" roughness={0.9} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+type TreeModel = { crown: THREE.BufferGeometry; trunk: THREE.BufferGeometry };
+
+export function useTree(light = false): TreeModel {
+  const model = useMemo(() => buildTree({ light }), [light]);
+  useEffect(
+    () => () => {
+      model.crown.dispose();
+      model.trunk.dispose();
+    },
+    [model],
+  );
+  return model;
+}
+
+export function useCanopy(): THREE.BufferGeometry {
+  const crown = useMemo(() => {
+    const model = buildTree();
+    model.trunk.dispose();
+    return model.crown;
+  }, []);
+  useEffect(() => () => crown.dispose(), [crown]);
+  return crown;
+}
+
+function girth(radius: number): number {
+  return Math.min(1.2, Math.max(0.45, radius / 4.5));
+}
+
+export function MappedTrees({ yard }: { yard: Yard }) {
+  const model = useTree(true);
+  const crowns = useRef<THREE.InstancedMesh>(null);
+  const trunks = useRef<THREE.InstancedMesh>(null);
+  const trees = yard.campus.trees;
+  useEffect(() => {
+    const matrix = new THREE.Matrix4();
+    const turn = new THREE.Quaternion();
+    const shade = new THREE.Color();
+    trees.forEach((tree, index) => {
+      const [x, , z] = yard.toScene(tree.x, tree.y);
+      const tall = tree.radius * CANOPY_FLATTEN;
+      turn.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, index * 1.7);
+      matrix.compose(new THREE.Vector3(x, tree.height - tall, z), turn, new THREE.Vector3(tree.radius, tall, tree.radius));
+      crowns.current?.setMatrixAt(index, matrix);
+      crowns.current?.setColorAt(index, treeTint(index, MAPPED_LIFT, shade));
+      const trunk = Math.max(0.5, tree.height - tall);
+      const thick = girth(tree.radius);
+      matrix.compose(new THREE.Vector3(x, trunk / 2, z), turn, new THREE.Vector3(thick, trunk, thick));
+      trunks.current?.setMatrixAt(index, matrix);
+    });
+    if (crowns.current) {
+      crowns.current.instanceMatrix.needsUpdate = true;
+      if (crowns.current.instanceColor) crowns.current.instanceColor.needsUpdate = true;
+      crowns.current.computeBoundingSphere();
+    }
+    if (trunks.current) {
+      trunks.current.instanceMatrix.needsUpdate = true;
+      trunks.current.computeBoundingSphere();
+    }
+  }, [trees, yard, model]);
+  if (trees.length === 0) return null;
+  return (
+    <group>
+      <instancedMesh ref={crowns} args={[model.crown, undefined, trees.length]} castShadow raycast={() => null}>
+        <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
+      </instancedMesh>
+      <instancedMesh ref={trunks} args={[model.trunk, undefined, trees.length]} castShadow raycast={() => null}>
+        <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
+      </instancedMesh>
+    </group>
+  );
+}
+
+function PlantedTree({ yard, tree, chosen, model }: { yard: Yard; tree: PlanTree; chosen: boolean; model: TreeModel }) {
+  const controls = useThree((state) => state.controls) as OrbitControlsImpl | null;
+  const invalidate = useThree((state) => state.invalidate);
+  const mode = useRef<'move' | null>(null);
+  const [x, , z] = yard.toScene(tree.x, tree.y);
+  const tall = tree.radius * CANOPY_FLATTEN;
+  const trunk = Math.max(0.6, tree.height - tall);
+  const thick = girth(tree.radius);
+  const tint = useMemo(() => `#${treeTint(tree.id).getHexString()}`, [tree.id]);
+  const body = useRef<THREE.Group>(null);
+  useEffect(() => {
+    const group = body.current;
+    if (!group) return;
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      group.scale.setScalar(1);
+      return;
+    }
+    const grow = animate(0.05, 1, {
+      type: 'spring',
+      stiffness: 260,
+      damping: 17,
+      onUpdate: (value) => {
+        group.scale.setScalar(value);
+        invalidate();
+      },
+    });
+    return () => grow.stop();
+  }, []);
+
+  const begin = (kind: 'move') => (event: ThreeEvent<PointerEvent>) => {
+    if (event.button !== 0 || yard.tool === 'sail') return;
+    event.stopPropagation();
+    mode.current = kind;
+    yard.select(tree.id);
+    yard.setBusy(true);
+    if (controls) controls.enabled = false;
+    (event.target as Element).setPointerCapture(event.pointerId);
+  };
+  const move = (event: ThreeEvent<PointerEvent>) => {
+    if (!mode.current) return;
+    event.stopPropagation();
+    const point = groundPoint(event);
+    if (!point) return;
+    const [px, py] = yard.fromScene(point.x, point.z);
+    yard.moveTree(tree.id, px, py);
+  };
+  const end = (event: ThreeEvent<PointerEvent>) => {
+    if (!mode.current) return;
+    event.stopPropagation();
+    mode.current = null;
+    yard.setBusy(false);
+    yard.commit();
+    if (controls) controls.enabled = true;
+    (event.target as Element).releasePointerCapture(event.pointerId);
+  };
+
+  return (
+    <group position={[x, 0, z]}>
+      <group ref={body} scale={0.05}>
+      <mesh
+        geometry={model.trunk}
+        position-y={trunk / 2}
+        scale={[thick, trunk, thick]}
+        rotation-y={tree.id * 1.7}
+        castShadow
+        onPointerDown={begin('move')}
+        onPointerMove={move}
+        onPointerUp={end}
+      >
+        <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
+      </mesh>
+      <mesh
+        geometry={model.crown}
+        position-y={tree.height - tall}
+        scale={[tree.radius, tall, tree.radius]}
+        rotation-y={tree.id * 1.7}
+        castShadow
+        onPointerDown={begin('move')}
+        onPointerMove={move}
+        onPointerUp={end}
+        onPointerOver={() => (document.body.style.cursor = 'grab')}
+        onPointerOut={() => (document.body.style.cursor = '')}
+      >
+        <meshStandardMaterial vertexColors color={tint} roughness={1} />
+      </mesh>
+      </group>
+      {chosen && (
+        <mesh rotation-x={-Math.PI / 2} position-y={0.12} raycast={() => null}>
+          <ringGeometry args={[tree.radius + 0.5, tree.radius + 0.95, 72]} />
+          <meshBasicMaterial color={INK} transparent opacity={0.8} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+function SailMesh({ yard, sail, chosen }: { yard: Yard; sail: Sail; chosen: boolean }) {
+  const [a, , c] = sail.corners.map(([x, y]) => yard.toScene(x, y));
+  const middleX = (a[0] + c[0]) / 2;
+  const middleZ = (a[2] + c[2]) / 2;
+  const wide = Math.max(0.5, Math.round(Math.abs(c[0] - a[0]) * 10) / 10);
+  const deep = Math.max(0.5, Math.round(Math.abs(c[2] - a[2]) * 10) / 10);
+  const height = Math.round(sail.height * 10) / 10;
+  const model = useMemo(() => buildSail(wide, deep, height), [wide, deep, height]);
+  useEffect(
+    () => () => {
+      model.cloth.dispose();
+      model.posts.dispose();
+    },
+    [model],
+  );
+  return (
+    <group position={[middleX, 0, middleZ]}>
+      <mesh
+        geometry={model.cloth}
+        castShadow
+        onPointerDown={(event) => {
+          if (yard.tool === 'sail') return;
+          event.stopPropagation();
+          yard.select(sail.id);
+        }}
+      >
+        <meshStandardMaterial color={chosen ? CLOTH_CHOSEN : CLOTH} roughness={1} side={THREE.DoubleSide} />
+        <Edges color={INK} />
+      </mesh>
+      <mesh geometry={model.posts} castShadow raycast={() => null}>
+        <meshStandardMaterial color={STEEL} roughness={0.7} />
+      </mesh>
+    </group>
+  );
+}
+
+function Plan({ yard }: { yard: Yard }) {
+  useYard(yard);
+  const model = useTree();
+  const ghost = yard.ghost;
+  return (
+    <group>
+      {yard.trees.map((tree) => (
+        <PlantedTree key={tree.id} yard={yard} tree={tree} chosen={yard.selected === tree.id} model={model} />
+      ))}
+      {yard.sails.map((sail) => (
+        <SailMesh key={sail.id} yard={yard} sail={sail} chosen={yard.selected === sail.id} />
+      ))}
+      {ghost && yard.tool === 'tree' && !yard.busy && (
+        <mesh
+          geometry={model.crown}
+          position={[yard.toScene(ghost.x, ghost.y)[0], treeHeight(yard.years) - treeRadius(yard.years) * CANOPY_FLATTEN, yard.toScene(ghost.x, ghost.y)[2]]}
+          scale={[treeRadius(yard.years), treeRadius(yard.years) * CANOPY_FLATTEN, treeRadius(yard.years)]}
+          raycast={() => null}
+        >
+          <meshBasicMaterial color={ghost.ok ? LEAF : '#6d7f78'} transparent opacity={ghost.ok ? 0.55 : 0.25} depthWrite={false} />
+        </mesh>
+      )}
+    </group>
+  );
+}
+
+export function Sun({ yard, reach, locked = false, shadow = 4096 }: { yard: Yard; reach: number; locked?: boolean; shadow?: number }) {
+  const { camera, pointer, scene } = useThree();
+  const controls = useThree((state) => state.controls) as OrbitControlsImpl | null;
+  const ball = useRef<THREE.Group>(null);
+  const light = useRef<THREE.DirectionalLight>(null);
+  const fill = useRef<THREE.HemisphereLight>(null);
+  const held = useRef(false);
+  const path = useMemo(() => {
+    const samples: { minute: number; at: THREE.Vector3 }[] = [];
+    for (let minute = yard.sunrise; minute <= yard.sunset; minute += 4) {
+      const ray = yard.sun(minute);
+      samples.push({ minute, at: new THREE.Vector3(ray.x * reach, ray.z * reach, -ray.y * reach) });
+    }
+    const hours: { minute: number; at: THREE.Vector3 }[] = [];
+    for (let minute = Math.ceil((yard.sunrise + 40) / 180) * 180; minute <= yard.sunset - 40; minute += 180) {
+      const ray = yard.sun(minute);
+      hours.push({ minute, at: new THREE.Vector3(ray.x * reach, ray.z * reach, -ray.y * reach) });
+    }
+    return { samples, hours };
+  }, [yard, reach]);
+  const flat = useMemo(() => path.samples.map((sample) => sample.at), [path]);
+  const projected = useMemo(() => new THREE.Vector3(), []);
+  const aim = useMemo(
+    () => ({ focus: new THREE.Vector3(), look: new THREE.Vector3(), toward: new THREE.Vector3(), unit: new THREE.Vector3(), across: new THREE.Vector3(), lift: new THREE.Vector3(), span: 0, size: 0 }),
+    [],
+  );
+
+  useEffect(() => {
+    const lamp = light.current;
+    if (!lamp) return;
+    scene.add(lamp.target);
+    return () => {
+      scene.remove(lamp.target);
+    };
+  }, [scene]);
+
+  useFrame((state) => {
+    const ray = yard.sun();
+    const up = Math.max(0, ray.z);
+    if (ball.current) {
+      ball.current.position.set(ray.x * reach, ray.z * reach, -ray.y * reach);
+      ball.current.visible = ray.z > -0.02;
+    }
+    const lamp = light.current;
+    if (lamp) {
+      const { focus, look, toward, unit, across, lift } = aim;
+      const orbit = state.controls as OrbitControlsImpl | null;
+      const view = state.camera;
+      if (orbit) focus.copy(orbit.target);
+      else {
+        view.getWorldDirection(look);
+        if (look.y < -1e-6) focus.copy(view.position).addScaledVector(look, -view.position.y / look.y);
+        else focus.set(0, 0, 0);
+      }
+      const top = yard.radius * 1.25;
+      const low = Math.min(60, top);
+      const wanted = Math.min(top, Math.max(low, view.position.distanceTo(focus) * 0.8));
+      const steps = Math.max(0, Math.ceil(Math.log(wanted / low) / Math.log(1.15) - 1e-6));
+      const span = Math.min(top, low * 1.15 ** steps);
+      const size = lamp.shadow.mapSize.x;
+      if (span !== aim.span || size !== aim.size) {
+        aim.span = span;
+        aim.size = size;
+        const box = lamp.shadow.camera;
+        box.left = -span;
+        box.right = span;
+        box.top = span;
+        box.bottom = -span;
+        box.updateProjectionMatrix();
+        lamp.shadow.normalBias = ((2 * span) / size) * 1.6;
+      }
+      toward.set(ray.x, Math.max(ray.z, 0.03), -ray.y);
+      unit.copy(toward).normalize();
+      across.set(unit.z, 0, -unit.x);
+      if (across.lengthSq() < 1e-12) across.set(1, 0, 0);
+      else across.normalize();
+      lift.crossVectors(unit, across);
+      const texel = (2 * span) / size;
+      const a = Math.round(focus.dot(across) / texel) * texel;
+      const b = Math.round(focus.dot(lift) / texel) * texel;
+      const c = focus.dot(unit);
+      focus.copy(across).multiplyScalar(a).addScaledVector(lift, b).addScaledVector(unit, c);
+      lamp.position.copy(focus).addScaledVector(toward, reach * 3);
+      lamp.target.position.copy(focus);
+      lamp.target.updateMatrixWorld();
+      lamp.intensity = 1.17 * Math.min(1, up * 6);
+      lamp.color.copy(SUN_LOW).lerp(SUN_HIGH, Math.min(1, Math.max(0, (ray.z - 0.1) / 0.5)));
+    }
+    if (fill.current) fill.current.intensity = 1.8 + 0.6 * Math.min(1, up * 5);
+  });
+
+  const drag = (event: ThreeEvent<PointerEvent>) => {
+    if (!held.current) return;
+    event.stopPropagation();
+    let best = 0;
+    let nearest = Infinity;
+    path.samples.forEach((sample, index) => {
+      projected.copy(sample.at).project(camera);
+      const distance = Math.hypot(projected.x - pointer.x, projected.y - pointer.y);
+      if (distance < nearest) {
+        nearest = distance;
+        best = index;
+      }
+    });
+    yard.setMinute(path.samples[best].minute);
+  };
+
+  const size = reach * 0.045;
+  return (
+    <group>
+      <hemisphereLight ref={fill} args={[SKY, BOUNCE, 1.8]} />
+      <directionalLight
+        ref={light}
+        castShadow
+        shadow-mapSize={[shadow, shadow]}
+        shadow-bias={-0.0002}
+        shadow-radius={2}
+        shadow-camera-near={1}
+        shadow-camera-far={reach * 8}
+      />
+      {flat.length > 1 && <Line points={flat} color={INK} lineWidth={1.4} transparent opacity={0.45} />}
+      {path.hours.map((hour) => (
+        <group key={hour.minute} position={hour.at}>
+          <mesh raycast={() => null}>
+            <sphereGeometry args={[size * 0.16, 10, 8]} />
+            <meshBasicMaterial color={INK} />
+          </mesh>
+        </group>
+      ))}
+      <group ref={ball}>
+        <mesh raycast={() => null}>
+          <sphereGeometry args={[size, 40, 28]} />
+          <meshBasicMaterial color={HEAT} />
+        </mesh>
+        <mesh
+          {...(locked ? { raycast: () => null } : {})}
+          onPointerDown={(event) => {
+            event.stopPropagation();
+            held.current = true;
+            yard.setBusy(true);
+            if (controls) controls.enabled = false;
+            (event.target as Element).setPointerCapture(event.pointerId);
+            document.body.style.cursor = 'grabbing';
+          }}
+          onPointerMove={drag}
+          onPointerUp={(event) => {
+            event.stopPropagation();
+            held.current = false;
+            yard.setBusy(false);
+            if (controls) controls.enabled = true;
+            (event.target as Element).releasePointerCapture(event.pointerId);
+            document.body.style.cursor = '';
+          }}
+          onPointerOver={() => !held.current && (document.body.style.cursor = 'grab')}
+          onPointerOut={() => !held.current && (document.body.style.cursor = '')}
+        >
+          <sphereGeometry args={[size * 2.6, 16, 12]} />
+          <meshBasicMaterial transparent opacity={0} depthWrite={false} />
+        </mesh>
+      </group>
+    </group>
+  );
+}
+
+function ProbeMark({ yard }: { yard: Yard }) {
+  useYard(yard);
+  const probe = yard.probe;
+  if (!probe || !probe.home || probe.surface === 'roof') return null;
+  const [x, , z] = yard.toScene(probe.x, probe.y);
+  const tall = probeHeight(yard);
+  return (
+    <group position={[x, 0, z]}>
+      <mesh position-y={tall / 2} raycast={() => null}>
+        <cylinderGeometry args={[0.14, 0.14, tall, 6]} />
+        <meshBasicMaterial color={INK} />
+      </mesh>
+      <mesh rotation-x={-Math.PI / 2} position-y={0.15} raycast={() => null}>
+        <ringGeometry args={[1.5, 1.9, 40]} />
+        <meshBasicMaterial color={INK} />
+      </mesh>
+    </group>
+  );
+}
+
+export function probeHeight(yard: Yard): number {
+  return yard.radius * 0.07;
+}
+
+export function sunReach(yard: Yard): number {
+  return yard.radius * 0.72;
+}
+
+const pin = new THREE.Vector3();
+
+function Pins({ layer }: { layer: RefObject<HTMLDivElement | null> }) {
+  useFrame(({ camera, size }) => {
+    const root = layer.current;
+    if (!root) return;
+    for (const node of Array.from(root.children)) {
+      const item = node as HTMLElement;
+      const at = item.dataset.at;
+      if (!at) continue;
+      const [x, y, z] = at.split(' ').map(Number);
+      pin.set(x, y, z).project(camera);
+      item.style.visibility = pin.z < 1 ? 'visible' : 'hidden';
+      item.style.transform = `translate3d(${((pin.x + 1) / 2) * size.width}px, ${((1 - pin.y) / 2) * size.height}px, 0)`;
+    }
+  });
+  return null;
+}
+
+function Rig({ yard, reach }: { yard: Yard; reach: number }) {
+  const { camera, size, invalidate } = useThree();
+  const controls = useThree((state) => state.controls) as OrbitControlsImpl | null;
+  const fitted = useRef(false);
+  const home = useRef(1000);
+  const turn = useRef(0);
+  const glide = useRef<{ stop: () => void } | null>(null);
+  const view = camera as THREE.PerspectiveCamera;
+  const half = (view.fov * Math.PI) / 360;
+
+  useEffect(() => {
+    const narrow = size.width / size.height < 1;
+    const span = Math.max(yard.radius * 0.95, reach * 1.05);
+    const distance = (span / Math.tan(half)) * (narrow ? 1.5 : 0.9);
+    const before = home.current;
+    home.current = distance;
+    if (fitted.current && controls && Math.abs(view.position.distanceTo(controls.target) - before) < before * 0.07) {
+      const offset = view.position.clone().sub(controls.target).setLength(distance);
+      view.position.copy(controls.target).add(offset);
+    }
+    if (!fitted.current) {
+      const direction = new THREE.Vector3(-0.42, 0.62, 0.86).normalize();
+      view.position.copy(direction.multiplyScalar(distance));
+      fitted.current = true;
+    }
+    if (import.meta.env.DEV) (window as unknown as { view: THREE.Camera }).view = view;
+    view.near = 4;
+    view.far = distance * 12;
+    if (size.width >= 1024) view.setViewOffset(size.width, size.height, -size.width * 0.07, -size.height * 0.02, size.width, size.height);
+    else view.clearViewOffset();
+    view.updateProjectionMatrix();
+    invalidate();
+  }, [view, half, size.width, size.height, yard, reach]);
+
+  const shown = useRef(1);
+  useEffect(
+    () => () => {
+      const heading = document.querySelector<HTMLElement>('[data-heading]');
+      if (heading) heading.style.opacity = '';
+    },
+    [],
+  );
+
+  useFrame(() => {
+    if (controls && fitted.current) {
+      const near = view.position.distanceTo(controls.target) / home.current;
+      const opacity = Math.min(1, Math.max(0, (near - 0.74) / 0.18));
+      if (Math.abs(opacity - shown.current) > 0.004) {
+        shown.current = opacity;
+        const heading = document.querySelector<HTMLElement>('[data-heading]');
+        if (heading) heading.style.opacity = String(opacity);
+      }
+    }
+    if (!controls || turn.current === yard.focusTurn) return;
+    turn.current = yard.focusTurn;
+    const goal = yard.focus;
+    const fromTarget = controls.target.clone();
+    const offset = view.position.clone().sub(controls.target);
+    const fromLength = offset.length();
+    const toTarget = goal ? new THREE.Vector3(...yard.toScene(goal.x, goal.y)) : new THREE.Vector3(0, reach * 0.14, 0);
+    const toLength = goal ? Math.min(home.current, Math.max(90, (goal.span / Math.tan(half)) * 1.25)) : home.current;
+    const still = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    glide.current?.stop();
+    glide.current = animate(0, 1, {
+      duration: still ? 0 : 1.2,
+      ease: [0.3, 0, 0.15, 1],
+      onUpdate: (share) => {
+        controls.target.lerpVectors(fromTarget, toTarget, share);
+        view.position.copy(controls.target).add(offset.clone().setLength(fromLength + (toLength - fromLength) * share));
+        invalidate();
+      },
+    });
+  });
+
+  return (
+    <OrbitControls
+      makeDefault
+      target={[0, reach * 0.14, 0]}
+      enablePan
+      screenSpacePanning={false}
+      zoomToCursor
+      enableDamping
+      dampingFactor={0.08}
+      rotateSpeed={0.55}
+      zoomSpeed={1.25}
+      minDistance={45}
+      maxDistance={yard.radius * 6}
+      minPolarAngle={0.12}
+      maxPolarAngle={1.42}
+      onStart={() => glide.current?.stop()}
+    />
+  );
+}
+
+export function Backdrop({ yard }: { yard: Yard }) {
+  return (
+    <>
+      <color attach="background" args={['#e9eff1']} />
+      <fog attach="fog" args={['#e9eff1', yard.radius * 4, yard.radius * 9]} />
+      <mesh rotation-x={-Math.PI / 2} position-y={-0.3} raycast={() => null}>
+        <circleGeometry args={[yard.radius * 12, 64]} />
+        <meshBasicMaterial color={PAPER} />
+      </mesh>
+    </>
+  );
+}
+
+export function Pulse({ yard }: { yard: Yard }) {
+  const invalidate = useThree((state) => state.invalidate);
+  useEffect(() => {
+    invalidate();
+    return yard.subscribe(() => invalidate());
+  }, [yard, invalidate]);
+  useFrame(() => {
+    yard.tick(performance.now());
+    if (yard.working()) invalidate();
+  });
+  return null;
+}
+
+type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number };
+
+export function Scene({ yard, layer, shadow = 4096, texture = 4096 }: SceneProps) {
+  const reach = sunReach(yard);
+  return (
+    <>
+      <Backdrop yard={yard} />
+      <Pulse yard={yard} />
+      <Ground yard={yard} texture={texture} />
+      <Blocks yard={yard} />
+      <MappedTrees yard={yard} />
+      <Plan yard={yard} />
+      <Sun yard={yard} reach={reach} shadow={shadow} />
+      <ProbeMark yard={yard} />
+      <Rig yard={yard} reach={reach} />
+      <Pins layer={layer} />
+    </>
+  );
+}
