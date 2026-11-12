@@ -9,7 +9,9 @@ import type { Block } from '@/engine/campus';
 import { CANOPY_FLATTEN, type Sail } from '@/engine/shade';
 import { treeHeight, treeRadius, type PlanTree, type Yard } from './controller';
 import { Ground } from './ground';
-import { buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint } from './models';
+import { BLOB_LIFT, buildBlob, buildBlock, buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint, type BlockModel } from './models';
+import { Props } from './props';
+import type { PropLevel } from './quality';
 
 const INK = '#12261c';
 const LEAF = '#2f6243';
@@ -25,6 +27,7 @@ const BOUNCE = '#d2cabb';
 const SUN_LOW = new THREE.Color('#ffe6c8');
 const SUN_HIGH = new THREE.Color('#fff7ec');
 const MAPPED_LIFT = 1.12;
+const BLOB_SPREAD = 1.9;
 const FLOOR = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const spot = new THREE.Vector3();
 
@@ -38,11 +41,9 @@ function groundPoint(event: ThreeEvent<PointerEvent>): THREE.Vector3 | null {
 
 export { Ground } from './ground';
 
-function prism(yard: Yard, block: Block, height: number): THREE.ExtrudeGeometry {
-  const shape = new THREE.Shape(block.ring.map(([x, y]) => new THREE.Vector2(x - yard.middle[0], y - yard.middle[1])));
-  const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false });
-  geometry.rotateX(-Math.PI / 2);
-  return geometry;
+function prism(yard: Yard, block: Block, tint?: THREE.Color): BlockModel {
+  const footprint = block.ring.map(([x, y]): [number, number] => [x - yard.middle[0], y - yard.middle[1]]);
+  return buildBlock(footprint, block.height, tint ? { tint } : { home: true });
 }
 
 export function Blocks({ yard }: { yard: Yard }) {
@@ -50,23 +51,11 @@ export function Blocks({ yard }: { yard: Yard }) {
     const mine = yard.campus.blocks
       .map((block, index) => ({ block, index }))
       .filter((item) => item.block.home)
-      .map((item) => ({ ...item, geometry: prism(yard, item.block, item.block.height) }));
+      .map((item) => ({ ...item, ...prism(yard, item.block) }));
     const others = yard.campus.blocks
       .map((block, index) => ({ block, index }))
       .filter((item) => !item.block.home)
-      .map(({ block, index }) => {
-        const geometry = prism(yard, block, block.height);
-        const tint = NEIGHBORS[index % NEIGHBORS.length];
-        const count = geometry.getAttribute('position').count;
-        const colors = new Float32Array(count * 3);
-        for (let at = 0; at < count; at += 1) {
-          colors[at * 3] = tint.r;
-          colors[at * 3 + 1] = tint.g;
-          colors[at * 3 + 2] = tint.b;
-        }
-        geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-        return geometry;
-      });
+      .map(({ block, index }) => prism(yard, block, NEIGHBORS[index % NEIGHBORS.length]).geometry);
     const merged = others.length > 0 ? mergeGeometries(others) : null;
     for (const other of others) other.dispose();
     return { home: mine, away: merged };
@@ -95,10 +84,10 @@ export function Blocks({ yard }: { yard: Yard }) {
   const units = useMemo(
     () =>
       buildRoofUnits(
-        yard.campus.blocks.filter((block) => block.home),
+        home.map((item) => ({ ring: item.block.ring, height: item.roof })),
         (x, y) => yard.toScene(x, y),
       ),
-    [yard],
+    [yard, home],
   );
   useEffect(() => () => units?.dispose(), [units]);
   const press = useRef<{ x: number; y: number; at: number; index: number } | null>(null);
@@ -124,7 +113,7 @@ export function Blocks({ yard }: { yard: Yard }) {
             if (Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) < 6 && performance.now() - pressed.at < 450) yard.pickBlock(index);
           }}
         >
-          <Edges threshold={20} color="#7d8e88" />
+          <Edges threshold={50} color="#7d8e88" />
         </mesh>
       ))}
       {away && <mesh geometry={away} material={walls.others} castShadow receiveShadow />}
@@ -161,18 +150,39 @@ export function useCanopy(): THREE.BufferGeometry {
   return crown;
 }
 
+type Blob = ReturnType<typeof buildBlob>;
+
+export function useBlob(): Blob {
+  const blob = useMemo(buildBlob, []);
+  useEffect(
+    () => () => {
+      blob.geometry.dispose();
+      blob.material.dispose();
+    },
+    [blob],
+  );
+  return blob;
+}
+
+export function blobSize(radius: number): number {
+  return radius * BLOB_SPREAD;
+}
+
 function girth(radius: number): number {
   return Math.min(1.2, Math.max(0.45, radius / 4.5));
 }
 
 export function MappedTrees({ yard }: { yard: Yard }) {
   const model = useTree(true);
+  const blob = useBlob();
   const crowns = useRef<THREE.InstancedMesh>(null);
   const trunks = useRef<THREE.InstancedMesh>(null);
+  const blobs = useRef<THREE.InstancedMesh>(null);
   const trees = yard.campus.trees;
   useEffect(() => {
     const matrix = new THREE.Matrix4();
     const turn = new THREE.Quaternion();
+    const flat = new THREE.Quaternion();
     const shade = new THREE.Color();
     trees.forEach((tree, index) => {
       const [x, , z] = yard.toScene(tree.x, tree.y);
@@ -185,6 +195,9 @@ export function MappedTrees({ yard }: { yard: Yard }) {
       const thick = girth(tree.radius);
       matrix.compose(new THREE.Vector3(x, trunk / 2, z), turn, new THREE.Vector3(thick, trunk, thick));
       trunks.current?.setMatrixAt(index, matrix);
+      const spread = blobSize(tree.radius);
+      matrix.compose(new THREE.Vector3(x, BLOB_LIFT, z), flat, new THREE.Vector3(spread, 1, spread));
+      blobs.current?.setMatrixAt(index, matrix);
     });
     if (crowns.current) {
       crowns.current.instanceMatrix.needsUpdate = true;
@@ -195,7 +208,11 @@ export function MappedTrees({ yard }: { yard: Yard }) {
       trunks.current.instanceMatrix.needsUpdate = true;
       trunks.current.computeBoundingSphere();
     }
-  }, [trees, yard, model]);
+    if (blobs.current) {
+      blobs.current.instanceMatrix.needsUpdate = true;
+      blobs.current.computeBoundingSphere();
+    }
+  }, [trees, yard, model, blob]);
   if (trees.length === 0) return null;
   return (
     <group>
@@ -205,11 +222,12 @@ export function MappedTrees({ yard }: { yard: Yard }) {
       <instancedMesh ref={trunks} args={[model.trunk, undefined, trees.length]} castShadow raycast={() => null}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>
+      <instancedMesh ref={blobs} args={[blob.geometry, blob.material, trees.length]} renderOrder={-1} raycast={() => null} />
     </group>
   );
 }
 
-function PlantedTree({ yard, tree, chosen, model }: { yard: Yard; tree: PlanTree; chosen: boolean; model: TreeModel }) {
+function PlantedTree({ yard, tree, chosen, model, blob }: { yard: Yard; tree: PlanTree; chosen: boolean; model: TreeModel; blob: Blob }) {
   const controls = useThree((state) => state.controls) as OrbitControlsImpl | null;
   const invalidate = useThree((state) => state.invalidate);
   const mode = useRef<'move' | null>(null);
@@ -217,6 +235,7 @@ function PlantedTree({ yard, tree, chosen, model }: { yard: Yard; tree: PlanTree
   const tall = tree.radius * CANOPY_FLATTEN;
   const trunk = Math.max(0.6, tree.height - tall);
   const thick = girth(tree.radius);
+  const spread = blobSize(tree.radius);
   const tint = useMemo(() => `#${treeTint(tree.id).getHexString()}`, [tree.id]);
   const body = useRef<THREE.Group>(null);
   useEffect(() => {
@@ -294,6 +313,7 @@ function PlantedTree({ yard, tree, chosen, model }: { yard: Yard; tree: PlanTree
       >
         <meshStandardMaterial vertexColors color={tint} roughness={1} />
       </mesh>
+      <mesh geometry={blob.geometry} material={blob.material} position-y={BLOB_LIFT} scale={[spread, 1, spread]} renderOrder={-1} raycast={() => null} />
       </group>
       {chosen && (
         <mesh rotation-x={-Math.PI / 2} position-y={0.12} raycast={() => null}>
@@ -344,11 +364,12 @@ function SailMesh({ yard, sail, chosen }: { yard: Yard; sail: Sail; chosen: bool
 function Plan({ yard }: { yard: Yard }) {
   useYard(yard);
   const model = useTree();
+  const blob = useBlob();
   const ghost = yard.ghost;
   return (
     <group>
       {yard.trees.map((tree) => (
-        <PlantedTree key={tree.id} yard={yard} tree={tree} chosen={yard.selected === tree.id} model={model} />
+        <PlantedTree key={tree.id} yard={yard} tree={tree} chosen={yard.selected === tree.id} model={model} blob={blob} />
       ))}
       {yard.sails.map((sail) => (
         <SailMesh key={sail.id} yard={yard} sail={sail} chosen={yard.selected === sail.id} />
@@ -677,7 +698,7 @@ export function Backdrop({ yard }: { yard: Yard }) {
     <>
       <color attach="background" args={['#e9eff1']} />
       <fog attach="fog" args={['#e9eff1', yard.radius * 4, yard.radius * 9]} />
-      <mesh rotation-x={-Math.PI / 2} position-y={-0.3} raycast={() => null}>
+      <mesh rotation-x={-Math.PI / 2} position-y={-0.3} renderOrder={-2} raycast={() => null}>
         <circleGeometry args={[yard.radius * 12, 64]} />
         <meshBasicMaterial color={PAPER} />
       </mesh>
@@ -698,9 +719,9 @@ export function Pulse({ yard }: { yard: Yard }) {
   return null;
 }
 
-type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number };
+type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel };
 
-export function Scene({ yard, layer, shadow = 4096, texture = 4096 }: SceneProps) {
+export function Scene({ yard, layer, shadow = 4096, texture = 4096, props = 'full' }: SceneProps) {
   const reach = sunReach(yard);
   return (
     <>
@@ -709,6 +730,7 @@ export function Scene({ yard, layer, shadow = 4096, texture = 4096 }: SceneProps
       <Ground yard={yard} texture={texture} />
       <Blocks yard={yard} />
       <MappedTrees yard={yard} />
+      <Props yard={yard} level={props} />
       <Plan yard={yard} />
       <Sun yard={yard} reach={reach} shadow={shadow} />
       <ProbeMark yard={yard} />

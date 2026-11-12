@@ -22,7 +22,7 @@ import { clockLabel } from '@/engine/sun';
 import { hottestDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
 import { SQUARE_FEET, YEARS, Yard, type Tool } from './controller';
 import { PerformanceMonitor } from '@react-three/drei';
-import { TIERS, quality } from './quality';
+import { TIERS, powerChoice, quality } from './quality';
 import { Scene, probeHeight, sunReach } from './Scene';
 import { SchoolPicker } from './SchoolPicker';
 import { keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
@@ -225,11 +225,12 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first }: Lo
           frameloop="demand"
           dpr={[1, TIERS[tier].dpr]}
           camera={{ fov: 30, near: 5, far: 9000, position: [-300, 420, 600] }}
+          gl={{ powerPreference: powerChoice() }}
           style={{ position: 'absolute', inset: 0, cursor: yard.tool === 'look' ? undefined : 'crosshair' }}
           aria-hidden="true"
         >
           <PerformanceMonitor onDecline={() => quality.lower()} />
-          <Scene yard={yard} layer={layer} shadow={TIERS[tier].shadow} texture={TIERS[tier].texture} />
+          <Scene yard={yard} layer={layer} shadow={TIERS[tier].shadow} texture={TIERS[tier].texture} props={TIERS[tier].props} />
         </Canvas>
 
         <div ref={layer} className="pointer-events-none absolute inset-0 overflow-hidden">

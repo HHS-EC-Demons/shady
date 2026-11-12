@@ -6,9 +6,10 @@ import { CANOPY_FLATTEN, shadowShift, type Sail } from '@/engine/shade';
 import type { Story } from '@/engine/story';
 import { treeRadius } from '@/engine/growth';
 import type { Yard } from '../yard/controller';
-import { TIERS, quality } from '../yard/quality';
-import { buildSail, treeTint } from '../yard/models';
-import { Backdrop, Blocks, Ground, MappedTrees, Pulse, Sun, sunReach, useTree } from '../yard/Scene';
+import { BLOB_LIFT, buildSail, treeTint } from '../yard/models';
+import { Props } from '../yard/props';
+import { TIERS, chipName, powerChoice, quality, shortChip } from '../yard/quality';
+import { Backdrop, Blocks, Ground, MappedTrees, Pulse, Sun, blobSize, sunReach, useBlob, useTree } from '../yard/Scene';
 import type { Days } from './Film';
 import { BEATS, film } from './state';
 
@@ -51,10 +52,12 @@ type Shared = { plant: number; grow: number; draw: number; move: number; sail: n
 
 function Trees({ yard, story, state }: { yard: Yard; story: Story; state: Shared }) {
   const model = useTree(true);
+  const blob = useBlob();
   const crowns = useRef<THREE.InstancedMesh>(null);
   const trunks = useRef<THREE.InstancedMesh>(null);
+  const blobs = useRef<THREE.InstancedMesh>(null);
   const seen = useRef({ plant: -1, grow: -1 });
-  const tools = useMemo(() => ({ matrix: new THREE.Matrix4(), spin: new THREE.Quaternion(), at: new THREE.Vector3(), size: new THREE.Vector3() }), []);
+  const tools = useMemo(() => ({ matrix: new THREE.Matrix4(), spin: new THREE.Quaternion(), flat: new THREE.Quaternion(), at: new THREE.Vector3(), size: new THREE.Vector3() }), []);
   const spots = useMemo(() => story.trees.map((tree) => yard.toScene(tree.x, tree.y)), [story, yard]);
   const count = story.trees.length;
 
@@ -67,11 +70,11 @@ function Trees({ yard, story, state }: { yard: Yard; story: Story; state: Shared
   }, [count, model]);
 
   useFrame(() => {
-    if (!crowns.current || !trunks.current) return;
+    if (!crowns.current || !trunks.current || !blobs.current) return;
     if (Math.abs(seen.current.plant - state.plant) < 0.0005 && Math.abs(seen.current.grow - state.grow) < 0.0005) return;
     seen.current.plant = state.plant;
     seen.current.grow = state.grow;
-    const { matrix, spin, at, size } = tools;
+    const { matrix, spin, flat, at, size } = tools;
     for (let index = 0; index < count; index += 1) {
       const tree = story.trees[index];
       const pop = ease(state.plant * count - index);
@@ -89,9 +92,15 @@ function Trees({ yard, story, state }: { yard: Yard; story: Story; state: Shared
       size.set(Math.max(0.001, thick), trunk, Math.max(0.001, thick));
       matrix.compose(at, spin, size);
       trunks.current.setMatrixAt(index, matrix);
+      const spread = Math.max(0.001, blobSize(tree.radius) * scale);
+      at.set(spots[index][0], BLOB_LIFT, spots[index][2]);
+      size.set(spread, 1, spread);
+      matrix.compose(at, flat, size);
+      blobs.current.setMatrixAt(index, matrix);
     }
     crowns.current.instanceMatrix.needsUpdate = true;
     trunks.current.instanceMatrix.needsUpdate = true;
+    blobs.current.instanceMatrix.needsUpdate = true;
   });
 
   if (count === 0) return null;
@@ -103,6 +112,7 @@ function Trees({ yard, story, state }: { yard: Yard; story: Story; state: Shared
       <instancedMesh ref={trunks} args={[model.trunk, undefined, count]} castShadow frustumCulled={false}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>
+      <instancedMesh ref={blobs} args={[blob.geometry, blob.material, count]} renderOrder={-1} frustumCulled={false} />
     </group>
   );
 }
@@ -328,6 +338,7 @@ type Props = { yard: Yard; days: Days; story: Story; onFrame: () => void; debug:
 function Meter() {
   const gl = useThree((state) => state.gl);
   const box = useMemo(() => document.querySelector<HTMLElement>('[data-perf]'), []);
+  const chip = useMemo(() => shortChip(chipName(gl.getContext())), [gl]);
   const frames = useRef({ count: 0, since: performance.now(), worst: 0, last: performance.now() });
   useFrame(() => {
     const now = performance.now();
@@ -337,7 +348,7 @@ function Meter() {
     log.count += 1;
     if (now - log.since < 500 || !box) return;
     const fps = Math.round((log.count * 1000) / (now - log.since));
-    box.textContent = `${fps} fps, worst ${Math.round(log.worst)} ms, ${gl.info.render.calls} calls, ${Math.round(gl.info.render.triangles / 1000)}k tris, dpr ${gl.getPixelRatio().toFixed(2)}, ${quality.tier}`;
+    box.textContent = `${fps} fps, worst ${Math.round(log.worst)} ms, ${gl.info.render.calls} calls, ${Math.round(gl.info.render.triangles / 1000)}k tris, dpr ${gl.getPixelRatio().toFixed(2)}, ${quality.tier}, ${chip}`;
     log.count = 0;
     log.since = now;
     log.worst = 0;
@@ -356,7 +367,7 @@ export default function FilmScene({ yard, days, story, onFrame, debug }: Props) 
       frameloop="demand"
       dpr={[1, TIERS[tier].dpr]}
       camera={{ fov: 30, near: 5, far: 9000, position: [-300, 420, 600] }}
-      gl={{ antialias: true, powerPreference: 'high-performance' }}
+      gl={{ antialias: true, powerPreference: powerChoice() }}
       style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
       aria-hidden="true"
     >
@@ -366,6 +377,7 @@ export default function FilmScene({ yard, days, story, onFrame, debug }: Props) 
       <Ground yard={yard} texture={TIERS[tier].texture} inert />
       <Blocks yard={yard} />
       <MappedTrees yard={yard} />
+      <Props yard={yard} level={TIERS[tier].props} />
       <Trees yard={yard} story={story} state={shared} />
       <SailModel yard={yard} sail={story.sail} state={shared} />
       <Walk yard={yard} story={story} state={shared} />
