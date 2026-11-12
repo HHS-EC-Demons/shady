@@ -29,14 +29,20 @@ export type Story = {
   sailCost: { low: number; high: number };
   focus3: Point;
   span3: number;
+  place5: string;
+  anchor5: Point;
   early: number;
   earlyTemp: number;
+  lateTemp: number;
   years: number;
   trees: Tree[];
   cost: { low: number; high: number };
 };
 
 const QUIET = ['Driveways', 'Driveway', 'Walkways', 'Walkway', 'Parking lots', 'Parking lot', 'Steps', 'Plaza', 'Bike path'];
+const PATHS = ['Driveways', 'Driveway', 'Walkways', 'Walkway', 'Steps', 'Bike path', 'Road'];
+const UNSEEN = /track|field|pitch/i;
+const STAGE = 'Band pad';
 const SHADED_BELOW = 128;
 const FEET = 3.28084;
 const SAIL_WIDE = 12;
@@ -168,13 +174,13 @@ function meanAt(place: Place, day: HeatDay, minute: number): number {
   return decode(sum / place.cells.length);
 }
 
-function plantFocus(trees: Tree[], anchors: Point[]): { focus: Point; span: number } {
+function plantFocus(trees: Tree[], anchors: { at: Point; open: boolean }[]): { focus: Point; span: number } {
   if (trees.length === 0) return { focus: [0, 0], span: 40 };
   const groups = anchors.map(() => [] as Tree[]);
   for (const tree of trees) {
     let best = -1;
     let gap = Infinity;
-    anchors.forEach(([x, y], index) => {
+    anchors.forEach(({ at: [x, y] }, index) => {
       const distance = Math.hypot(tree.x - x, tree.y - y);
       if (distance < gap) {
         gap = distance;
@@ -183,7 +189,7 @@ function plantFocus(trees: Tree[], anchors: Point[]): { focus: Point; span: numb
     });
     if (best >= 0) groups[best].push(tree);
   }
-  const largest = groups.reduce<Tree[]>((top, group) => (group.length > top.length ? group : top), []);
+  const largest = groups.reduce<Tree[]>((top, group, index) => (anchors[index].open && group.length > top.length ? group : top), []);
   const chosen = largest.length > 0 ? largest : trees;
   const x = chosen.reduce((sum, tree) => sum + tree.x, 0) / chosen.length;
   const y = chosen.reduce((sum, tree) => sum + tree.y, 0) / chosen.length;
@@ -208,11 +214,12 @@ function composeStory(campus: Campus, weather: Weather, count: number, years: nu
   const bare = simulate(ground, weather, backdrop);
   const peak = hottestMinute(bare, ground);
   const places = placesOf(campus, ground);
-  const ranked = places
+  const scored = places
     .map((place) => ({ place, report: placeDay(place, bare) }))
     .sort((a, b) => b.report.peak - a.report.peak);
+  const ranked = scored.filter((item) => !UNSEEN.test(item.place.label));
   const active = ranked.filter((item) => !QUIET.includes(item.place.label));
-  const star = active[0] ?? ranked[0];
+  const star = ranked.find((item) => !PATHS.includes(item.place.label)) ?? ranked[0];
   const middle: Point = star ? anchorOf(star.place, ground) : cellCenter(ground.grid, Math.floor((ground.grid.cols * ground.grid.rows) / 2));
 
   const walks = active
@@ -239,10 +246,14 @@ function composeStory(campus: Campus, weather: Weather, count: number, years: nu
     if (!tree) break;
     trees.push(tree);
   }
-  const others = active.filter((item) => item.place !== second?.item.place).map((item) => anchorOf(item.place, ground));
-  const { focus, span } = plantFocus(trees, others.length > 0 ? others : [middle]);
+  const others = scored
+    .filter((item) => !QUIET.includes(item.place.label) && item.place !== second?.item.place)
+    .map((item) => ({ at: anchorOf(item.place, ground), open: !UNSEEN.test(item.place.label) }));
+  const { focus, span } = plantFocus(trees, others.length > 0 ? others : [{ at: middle, open: true }]);
 
   const early = earlyMinute(campus, weather);
+  const fifth = ranked.find((item) => item.place.label === STAGE)?.place ?? second?.item.place ?? star?.place;
+  const anchor5: Point = fifth ? anchorOf(fifth, ground) : middle;
   const round = (meters: number) => (Number.isFinite(meters) ? Math.round((meters * FEET) / 5) * 5 : 0);
   return {
     school: campus.name,
@@ -263,8 +274,11 @@ function composeStory(campus: Campus, weather: Weather, count: number, years: nu
     sailCost: planCost(0, [sail]),
     focus3: focus,
     span3: span,
+    place5: fifth ? fifth.label : 'Ground',
+    anchor5,
     early,
-    earlyTemp: star ? Math.round(meanAt(star.place, bare, early)) : 0,
+    earlyTemp: fifth ? Math.round(meanAt(fifth, bare, early)) : 0,
+    lateTemp: fifth ? Math.round(meanAt(fifth, bare, peak)) : 0,
     years,
     trees,
     cost: planCost(trees.length, []),

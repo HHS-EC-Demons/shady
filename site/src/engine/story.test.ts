@@ -30,6 +30,14 @@ describe('the landing story', () => {
     expect(story.place2).not.toBe(story.place);
   });
 
+  it('zooms in on three different places', () => {
+    expect(new Set([story.place, story.place2, story.place5]).size).toBe(3);
+  });
+
+  it('never zooms in on a track or a field', () => {
+    for (const label of [story.place, story.place2, story.place5]) expect(label).not.toMatch(/track|field|pitch/i);
+  });
+
   it('shortens the walk with the sail', () => {
     expect(story.walk2After).toBeLessThan(story.walk2Before);
   });
@@ -39,7 +47,8 @@ describe('the landing story', () => {
   });
 
   it('is much cooler early in the day', () => {
-    expect(story.earlyTemp).toBeLessThan(story.placePeak - 20);
+    expect(story.earlyTemp).toBeLessThan(story.lateTemp);
+    expect(story.earlyTemp).toBeLessThan(story.lateTemp - 20);
   });
 
   it('puts the sail within 60 m of the second place', () => {
