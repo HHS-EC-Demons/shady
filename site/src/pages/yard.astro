@@ -1,0 +1,14 @@
+---
+import Base from '../layouts/Base.astro';
+import YardStage from '../components/yard/Yard.tsx';
+
+const raw = import.meta.env.BASE_URL;
+const base = raw.endsWith('/') ? raw : `${raw}/`;
+---
+
+<Base title="Yard" description="Drag the sun, plant trees, stretch shade sails and measure the ground on a 3D model of any school." current="yard" overlay>
+  <section class="stage">
+    <h1 class="sr-only">Yard</h1>
+    <YardStage client:only="react" base={base} />
+  </section>
+</Base>
