@@ -728,6 +728,270 @@ export function buildRoofUnits(
   return builder.geometry();
 }
 
+export type Flat = [number, number][];
+export type BlockForm = 'parapet' | 'chamfer' | 'hip' | 'flat';
+export type BlockModel = { geometry: THREE.BufferGeometry; roof: number; form: BlockForm };
+
+type Spot = [number, number, number];
+
+const CHAMFER = 0.22;
+const RIM = 0.4;
+const RECESS = 0.5;
+const EAVE = 0.35;
+const FASCIA = 0.15;
+const RISE = 2.4;
+const PEAK = 0.22;
+const HIP_AREA = 450;
+const HIP_CORNERS = 10;
+const MITRE = 3;
+const KEEP = 0.55;
+const UP: Spot = [0, 1, 0];
+const DOWN: Spot = [0, -1, 0];
+const ROOF_WARM: Spot = [0.88 / 0.91, 0.82 / 0.935, 0.74 / 0.965];
+
+function ringArea(ring: Flat): number {
+  let twice = 0;
+  for (let i = 0; i < ring.length; i += 1) {
+    const [ax, ay] = ring[i];
+    const [bx, by] = ring[(i + 1) % ring.length];
+    twice += ax * by - bx * ay;
+  }
+  return twice / 2;
+}
+
+function turn(a: [number, number], b: [number, number], c: [number, number]): number {
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+}
+
+function simpleRing(ring: Flat): boolean {
+  const count = ring.length;
+  for (let i = 0; i < count; i += 1) {
+    const a = ring[i];
+    const b = ring[(i + 1) % count];
+    for (let j = i + 2; j < count; j += 1) {
+      if (i === 0 && j === count - 1) continue;
+      const c = ring[j];
+      const d = ring[(j + 1) % count];
+      if (turn(a, b, c) * turn(a, b, d) < 0 && turn(c, d, a) * turn(c, d, b) < 0) return false;
+    }
+  }
+  return true;
+}
+
+export function cleanRing(ring: Flat): Flat {
+  const out: Flat = [];
+  for (const [x, y] of ring) {
+    const last = out[out.length - 1];
+    if (!last || Math.hypot(x - last[0], y - last[1]) > 0.02) out.push([x, y]);
+  }
+  while (out.length > 2 && Math.hypot(out[0][0] - out[out.length - 1][0], out[0][1] - out[out.length - 1][1]) <= 0.02) out.pop();
+  for (let i = 0; out.length > 3 && i < out.length; ) {
+    const a = out[(i + out.length - 1) % out.length];
+    const b = out[i];
+    const c = out[(i + 1) % out.length];
+    const ux = b[0] - a[0];
+    const uy = b[1] - a[1];
+    const vx = c[0] - b[0];
+    const vy = c[1] - b[1];
+    const straight = Math.abs(ux * vy - uy * vx) <= 2e-3 * Math.hypot(ux, uy) * Math.hypot(vx, vy) && ux * vx + uy * vy > 0;
+    if (straight) out.splice(i, 1);
+    else i += 1;
+  }
+  if (ringArea(out) < 0) out.reverse();
+  return out;
+}
+
+export function insetRing(ring: Flat, distance: number): Flat | null {
+  const count = ring.length;
+  if (count < 3) return null;
+  const out: Flat = [];
+  for (let i = 0; i < count; i += 1) {
+    const [px, py] = ring[(i + count - 1) % count];
+    const [x, y] = ring[i];
+    const [nx, ny] = ring[(i + 1) % count];
+    const first = Math.hypot(x - px, y - py);
+    const second = Math.hypot(nx - x, ny - y);
+    if (first < 1e-6 || second < 1e-6) return null;
+    const sx = (py - y) / first + (y - ny) / second;
+    const sy = (x - px) / first + (nx - x) / second;
+    const size = Math.hypot(sx, sy);
+    if (size < 1e-6) return null;
+    const reach = Math.min(MITRE, 2 / size) * distance;
+    out.push([x + (sx / size) * reach, y + (sy / size) * reach]);
+  }
+  const before = ringArea(ring);
+  const after = ringArea(out);
+  if (!(after > 0)) return null;
+  if (distance > 0 ? after < before * KEEP : after < before) return null;
+  for (let i = 0; i < count; i += 1) {
+    const j = (i + 1) % count;
+    if ((ring[j][0] - ring[i][0]) * (out[j][0] - out[i][0]) + (ring[j][1] - ring[i][1]) * (out[j][1] - out[i][1]) <= 0) return null;
+  }
+  return simpleRing(out) ? out : null;
+}
+
+function lift(point: [number, number], y: number): Spot {
+  return [point[0], y, -point[1]];
+}
+
+function outward(a: [number, number], b: [number, number]): Spot {
+  const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+  return [(b[1] - a[1]) / length, 0, (b[0] - a[0]) / length];
+}
+
+class Shell {
+  positions: number[] = [];
+  normals: number[] = [];
+  colors: number[] = [];
+  indices: number[] = [];
+
+  constructor(readonly paint: boolean) {}
+
+  private vertex(point: Spot, normal: Spot, color: THREE.Color | null): number {
+    this.positions.push(point[0], point[1], point[2]);
+    this.normals.push(normal[0], normal[1], normal[2]);
+    if (this.paint) this.colors.push(color?.r ?? 1, color?.g ?? 1, color?.b ?? 1);
+    return this.positions.length / 3 - 1;
+  }
+
+  face(points: Spot[], want: Spot, color: THREE.Color | null, normals?: Spot[]): void {
+    let nx = 0;
+    let ny = 0;
+    let nz = 0;
+    for (let i = 0; i < points.length; i += 1) {
+      const [ax, ay, az] = points[i];
+      const [bx, by, bz] = points[(i + 1) % points.length];
+      nx += (ay - by) * (az + bz);
+      ny += (az - bz) * (ax + bx);
+      nz += (ax - bx) * (ay + by);
+    }
+    const size = Math.hypot(nx, ny, nz);
+    if (size < 1e-9) return;
+    const flip = nx * want[0] + ny * want[1] + nz * want[2] < 0;
+    const sign = flip ? -1 / size : 1 / size;
+    const plain: Spot = [nx * sign, ny * sign, nz * sign];
+    const order = points.map((_, at) => at);
+    if (flip) order.reverse();
+    const ids = order.map((at) => this.vertex(points[at], normals ? normals[at] : plain, color));
+    for (let i = 1; i + 1 < ids.length; i += 1) this.indices.push(ids[0], ids[i], ids[i + 1]);
+  }
+
+  cap(ring: Flat, y: number, color: THREE.Color | null): void {
+    const contour = ring.map(([x, z]) => new THREE.Vector2(x, z));
+    const triangles = THREE.ShapeUtils.triangulateShape(contour, []);
+    const start = this.positions.length / 3;
+    for (const point of ring) this.vertex(lift(point, y), UP, color);
+    for (const [a, b, c] of triangles) {
+      if (turn(ring[a], ring[b], ring[c]) >= 0) this.indices.push(start + a, start + b, start + c);
+      else this.indices.push(start + a, start + c, start + b);
+    }
+  }
+
+  walls(ring: Flat, low: number, high: number, color: THREE.Color | null): void {
+    for (let i = 0; i < ring.length; i += 1) {
+      const a = ring[i];
+      const b = ring[(i + 1) % ring.length];
+      this.face([lift(a, low), lift(b, low), lift(b, high), lift(a, high)], outward(a, b), color);
+    }
+  }
+
+  bevel(outer: Flat, inner: Flat, low: number, high: number, color: THREE.Color | null): void {
+    for (let i = 0; i < outer.length; i += 1) {
+      const j = (i + 1) % outer.length;
+      const side = outward(outer[i], outer[j]);
+      this.face([lift(outer[i], low), lift(outer[j], low), lift(inner[j], high), lift(inner[i], high)], [side[0], 1, side[2]], color, [side, side, UP, UP]);
+    }
+  }
+
+  band(outer: Flat, inner: Flat, y: number, color: THREE.Color | null, want: Spot): void {
+    for (let i = 0; i < outer.length; i += 1) {
+      const j = (i + 1) % outer.length;
+      this.face([lift(outer[i], y), lift(outer[j], y), lift(inner[j], y), lift(inner[i], y)], want, color);
+    }
+  }
+
+  geometry(): THREE.BufferGeometry {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
+    geometry.setAttribute('normal', new THREE.Float32BufferAttribute(this.normals, 3));
+    if (this.paint) geometry.setAttribute('color', new THREE.Float32BufferAttribute(this.colors, 3));
+    geometry.setIndex(this.indices);
+    geometry.computeBoundingSphere();
+    geometry.computeBoundingBox();
+    return geometry;
+  }
+}
+
+function centroid(ring: Flat): [number, number] {
+  let twice = 0;
+  let x = 0;
+  let y = 0;
+  for (let i = 0; i < ring.length; i += 1) {
+    const [ax, ay] = ring[i];
+    const [bx, by] = ring[(i + 1) % ring.length];
+    const cross = ax * by - bx * ay;
+    twice += cross;
+    x += (ax + bx) * cross;
+    y += (ay + by) * cross;
+  }
+  return [x / (3 * twice), y / (3 * twice)];
+}
+
+function hipRoof(shell: Shell, ring: Flat, height: number, wall: THREE.Color | null): boolean {
+  const eave = insetRing(ring, -EAVE);
+  if (!eave) return false;
+  const middle = centroid(ring);
+  for (let i = 0; i < ring.length; i += 1) {
+    if (turn(ring[i], ring[(i + 1) % ring.length], middle) <= 1e-6) return false;
+  }
+  const top: Flat = ring.map(([x, y]) => [middle[0] + (x - middle[0]) * PEAK, middle[1] + (y - middle[1]) * PEAK]);
+  const roof = wall ? new THREE.Color(wall.r * ROOF_WARM[0], wall.g * ROOF_WARM[1], wall.b * ROOF_WARM[2]) : null;
+  shell.walls(ring, 0, height, wall);
+  shell.band(ring, eave, height, roof, DOWN);
+  shell.walls(eave, height, height + FASCIA, roof);
+  for (let i = 0; i < ring.length; i += 1) {
+    const j = (i + 1) % ring.length;
+    const side = outward(eave[i], eave[j]);
+    shell.face([lift(eave[i], height + FASCIA), lift(eave[j], height + FASCIA), lift(top[j], height + RISE), lift(top[i], height + RISE)], [side[0], 1, side[2]], roof);
+  }
+  shell.cap(top, height + RISE, roof);
+  return true;
+}
+
+export function buildBlock(footprint: Flat, height: number, options: { home?: boolean; tint?: THREE.Color } = {}): BlockModel {
+  const wall = options.tint ?? null;
+  const shell = new Shell(wall !== null);
+  const ring = cleanRing(footprint);
+  const tall = Math.max(height, 0.1);
+  if (ring.length < 3) return { geometry: shell.geometry(), roof: tall, form: 'flat' };
+  if (!options.home && ringArea(ring) < HIP_AREA && ring.length <= HIP_CORNERS && hipRoof(shell, ring, tall, wall)) {
+    return { geometry: shell.geometry(), roof: tall + RISE, form: 'hip' };
+  }
+  const bevel = tall > CHAMFER * 3 ? insetRing(ring, CHAMFER) : null;
+  const rim = options.home && bevel && tall > CHAMFER + RECESS + 0.5 ? insetRing(ring, RIM) : null;
+  if (bevel && rim) {
+    shell.walls(ring, 0, tall - CHAMFER, wall);
+    shell.bevel(ring, bevel, tall - CHAMFER, tall, wall);
+    shell.band(bevel, rim, tall, wall, UP);
+    for (let i = 0; i < rim.length; i += 1) {
+      const j = (i + 1) % rim.length;
+      const side = outward(rim[i], rim[j]);
+      shell.face([lift(rim[i], tall), lift(rim[j], tall), lift(rim[j], tall - RECESS), lift(rim[i], tall - RECESS)], [-side[0], 0, -side[2]], wall);
+    }
+    shell.cap(rim, tall - RECESS, wall);
+    return { geometry: shell.geometry(), roof: tall - RECESS, form: 'parapet' };
+  }
+  if (bevel) {
+    shell.walls(ring, 0, tall - CHAMFER, wall);
+    shell.bevel(ring, bevel, tall - CHAMFER, tall, wall);
+    shell.cap(bevel, tall, wall);
+    return { geometry: shell.geometry(), roof: tall, form: 'chamfer' };
+  }
+  shell.walls(ring, 0, tall, wall);
+  shell.cap(ring, tall, wall);
+  return { geometry: shell.geometry(), roof: tall, form: 'flat' };
+}
+
 const WALL_VERTEX_HEAD = `#include <common>
 varying vec3 vWallPos;
 varying vec3 vWallNormal;
@@ -758,12 +1022,24 @@ varying vec3 vWallPos;
 varying vec3 vWallNormal;
 varying float vWallLift;
 varying float vWallRaised;
-varying float vWallHigh;`;
+varying float vWallHigh;
+float wallHash( vec2 p ) {
+  vec3 q = fract( vec3( p.xyx ) * 0.1031 );
+  q += dot( q, q.yzx + 33.33 );
+  return fract( ( q.x + q.y ) * q.z );
+}
+float wallNoise( vec2 p ) {
+  vec2 i = floor( p );
+  vec2 f = fract( p );
+  f = f * f * ( 3.0 - 2.0 * f );
+  return mix( mix( wallHash( i ), wallHash( i + vec2( 1.0, 0.0 ) ), f.x ), mix( wallHash( i + vec2( 0.0, 1.0 ) ), wallHash( i + vec2( 1.0, 1.0 ) ), f.x ), f.y );
+}`;
 
 const WALL_FRAGMENT_BODY = `#include <color_fragment>
 vec3 wallN = normalize( vWallNormal );
 float wallRoof = smoothstep( 0.55, 0.85, wallN.y );
-float wallSide = 1.0 - smoothstep( 0.25, 0.5, abs( wallN.y ) );
+float wallDeck = smoothstep( 0.985, 0.998, wallN.y );
+float wallSide = 1.0 - smoothstep( 0.2, 0.3, abs( wallN.y ) );
 vec2 wallFlat = vec2( -wallN.z, wallN.x );
 vec2 wallDir = wallFlat / max( length( wallFlat ), 1e-4 );
 float wallAlong = dot( vWallPos.xz, wallDir );
@@ -788,10 +1064,23 @@ float wallGlass = wallBand * wallPane * wallRoom * wallFade;
 float wallFrame = max( wallMullion, wallTransom ) * wallGlass * wallFine;
 float wallSill = ( 1.0 - smoothstep( 0.06 - wallStepY, 0.06 + wallStepY, abs( wallIn - 0.94 ) ) ) * wallPane * wallRoom * wallFade * wallFine;
 float wallBase = ( 1.0 - smoothstep( 0.5 - wallStepY, 0.5 + wallStepY, wallHigh ) ) * wallFade;
+float wallJointW = max( 0.035, wallPx * 0.6 );
+float wallJointV = 1.0 - smoothstep( wallJointW - wallStepU, wallJointW + wallStepU, wallBay * 0.5 - wallOff );
+float wallJointH = ( 1.0 - smoothstep( wallJointW - wallStepY, wallJointW + wallStepY, min( wallIn, wallStorey - wallIn ) ) ) * step( 0.6, wallHigh );
+float wallJoint = max( wallJointV, wallJointH ) * wallFade * ( 1.0 - wallGlass ) * clamp( 0.05 / wallPx, 0.0, 1.0 );
+vec2 wallGrit = vWallPos.xz / 0.35;
+float wallSpeck = wallNoise( wallGrit ) * 0.65 + wallNoise( wallGrit * 0.37 + 17.0 ) * 0.35;
+float wallGravel = wallDeck * ( 1.0 - smoothstep( 0.05, 0.16, max( length( fwidth( vWallPos.xz ) ), 1e-4 ) ) );
 diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.7, 0.77, 0.83 ), wallGlass * ( 1.0 - wallFrame ) );
 diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * 0.9, wallSill );
 diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.84, 0.86, 0.86 ), wallBase );
-diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.91, 0.935, 0.965 ), wallRoof );`;
+diffuseColor.rgb *= 1.0 - 0.045 * wallJoint;
+diffuseColor.rgb *= 1.0 + ( wallSpeck - 0.5 ) * 0.07 * wallGravel;
+diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.91, 0.935, 0.965 ), wallRoof );
+float wallGrounded = step( 0.001, vWallRaised ) * step( vWallRaised, 0.9999 );
+float wallFoot = wallSide * ( 1.0 - smoothstep( 0.0, 2.0, wallHigh ) );
+float wallEave = wallSide * wallGrounded * smoothstep( wallTop - 0.7, wallTop, wallHigh );
+diffuseColor.rgb *= ( 1.0 - 0.10 * wallFoot ) * ( 1.0 - 0.09 * wallEave );`;
 
 const WALL_ROUGHNESS = `#include <roughnessmap_fragment>
 roughnessFactor = mix( roughnessFactor, 0.55, wallGlass * ( 1.0 - wallFrame ) );`;
@@ -804,6 +1093,44 @@ export function enhanceWalls(material: THREE.MeshStandardMaterial): void {
       .replace('#include <color_fragment>', WALL_FRAGMENT_BODY)
       .replace('#include <roughnessmap_fragment>', WALL_ROUGHNESS);
   };
-  material.customProgramCacheKey = () => 'shady-walls-2';
+  material.customProgramCacheKey = () => 'shady-walls-4';
   material.needsUpdate = true;
+}
+
+export const BLOB_LIFT = 0.06;
+
+const BLOB_VERTEX = `
+varying vec2 vBlob;
+void main() {
+  vBlob = uv * 2.0 - 1.0;
+  vec4 local = vec4( position, 1.0 );
+  #ifdef USE_INSTANCING
+  local = instanceMatrix * local;
+  #endif
+  gl_Position = projectionMatrix * modelViewMatrix * local;
+}
+`;
+
+const BLOB_FRAGMENT = `
+uniform vec3 uColor;
+varying vec2 vBlob;
+void main() {
+  float r = length( vBlob );
+  if ( r >= 1.0 ) discard;
+  gl_FragColor = vec4( uColor, 0.26 * ( 1.0 - smoothstep( 0.25, 1.0, r ) ) );
+  #include <colorspace_fragment>
+}
+`;
+
+export function buildBlob(): { geometry: THREE.BufferGeometry; material: THREE.ShaderMaterial } {
+  const geometry = new THREE.PlaneGeometry(1, 1);
+  geometry.rotateX(-Math.PI / 2);
+  const material = new THREE.ShaderMaterial({
+    vertexShader: BLOB_VERTEX,
+    fragmentShader: BLOB_FRAGMENT,
+    uniforms: { uColor: { value: new THREE.Color('#2b4450') } },
+    transparent: true,
+    depthWrite: false,
+  });
+  return { geometry, material };
 }
