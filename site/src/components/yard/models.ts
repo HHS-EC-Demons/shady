@@ -1,0 +1,809 @@
+import * as THREE from 'three';
+import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+
+type Random = () => number;
+
+function seeded(seed: number): Random {
+  let state = seed >>> 0;
+  return () => {
+    state = (state + 0x6d2b79f5) >>> 0;
+    let t = state;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function clamp(value: number, low = 0, high = 1): number {
+  return Math.min(high, Math.max(low, value));
+}
+
+function smooth(edge0: number, edge1: number, value: number): number {
+  const t = clamp((value - edge0) / (edge1 - edge0));
+  return t * t * (3 - 2 * t);
+}
+
+class Builder {
+  positions: number[] = [];
+  colors: number[] = [];
+  indices: number[] = [];
+
+  vertex(x: number, y: number, z: number, color?: THREE.Color): number {
+    this.positions.push(x, y, z);
+    if (color) this.colors.push(color.r, color.g, color.b);
+    return this.positions.length / 3 - 1;
+  }
+
+  triangle(a: number, b: number, c: number): void {
+    this.indices.push(a, b, c);
+  }
+
+  quad(a: number, b: number, c: number, d: number): void {
+    this.indices.push(a, b, c, a, c, d);
+  }
+
+  geometry(): THREE.BufferGeometry {
+    const geometry = new THREE.BufferGeometry();
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
+    if (this.colors.length === this.positions.length) geometry.setAttribute('color', new THREE.Float32BufferAttribute(this.colors, 3));
+    geometry.setIndex(this.indices);
+    geometry.computeVertexNormals();
+    geometry.computeBoundingSphere();
+    geometry.computeBoundingBox();
+    return geometry;
+  }
+}
+
+function srgb(hex: string): THREE.Color {
+  return new THREE.Color(hex);
+}
+
+function blend(from: THREE.Color, to: THREE.Color, share: number, out: THREE.Color): THREE.Color {
+  return out.copy(from).lerp(to, clamp(share));
+}
+
+type Wave = { x: number; y: number; z: number; f: number; p: number; a: number };
+
+function waves(random: Random, count: number, low: number, high: number, amp: number): Wave[] {
+  const list: Wave[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const u = random() * 2 - 1;
+    const turn = random() * Math.PI * 2;
+    const s = Math.sqrt(1 - u * u);
+    list.push({ x: s * Math.cos(turn), y: u, z: s * Math.sin(turn), f: low + (high - low) * random(), p: random() * Math.PI * 2, a: amp * (0.75 + 0.5 * random()) });
+  }
+  return list;
+}
+
+function field(list: Wave[], x: number, y: number, z: number): number {
+  let sum = 0;
+  for (const wave of list) sum += wave.a * Math.cos(wave.f * (wave.x * x + wave.y * y + wave.z * z) + wave.p);
+  return sum;
+}
+
+type Lobe = { x: number; y: number; z: number; r: number; tall: number; bumps: Wave[]; tone: number; detail: number; dirs: number[]; reaches: number[]; near: number };
+
+function lobeReach(lobe: Lobe, dx: number, dy: number, dz: number): number {
+  const under = dy < -0.15 ? 1 - 0.2 * smooth(-0.15, -1, dy) : 1;
+  return lobe.r * (1 + field(lobe.bumps, dx, dy, dz)) * under;
+}
+
+function meshDepth(lobe: Lobe, x: number, y: number, z: number): number {
+  const lx = x - lobe.x;
+  const ly = (y - lobe.y) / lobe.tall;
+  const lz = z - lobe.z;
+  const distance = Math.hypot(lx, ly, lz);
+  if (distance > lobe.r * 1.6) return -1;
+  if (distance < 1e-6) return 1;
+  const dx = lx / distance;
+  const dy = ly / distance;
+  const dz = lz / distance;
+  let lower = Infinity;
+  for (let index = 0; index < lobe.reaches.length; index += 1) {
+    if (dx * lobe.dirs[index * 3] + dy * lobe.dirs[index * 3 + 1] + dz * lobe.dirs[index * 3 + 2] > lobe.near) lower = Math.min(lower, lobe.reaches[index]);
+  }
+  if (lower === Infinity) return -1;
+  return (lower * 0.97 - distance) / lobe.r;
+}
+
+function crownLobes(shell: number, detail: number, size: number): Lobe[] {
+  const random = seeded(20261111);
+  const texture = seeded(9031);
+  const lobes: Lobe[] = [];
+  const add = (x: number, y: number, z: number, r: number, detail: number) => {
+    lobes.push({
+      x,
+      y,
+      z,
+      r,
+      tall: 1.08,
+      bumps: [...waves(texture, 4, 2.2, 3.6, 0.06), ...waves(texture, 8, 6.5, 10, 0.036)],
+      tone: random() * 2 - 1,
+      detail,
+      dirs: [],
+      reaches: [],
+      near: detail <= 1 ? 0.76 : detail === 2 ? 0.86 : 0.92,
+    });
+  };
+  add(0, -0.02, 0, 0.64, 1);
+  for (let index = 0; index < shell; index += 1) {
+    const share = (index + 0.5) / shell;
+    const lift = 0.9 - share * 1.6;
+    const ring = Math.sqrt(Math.max(0, 1 - lift * lift));
+    const angle = index * 2.39996 + (random() - 0.5) * 0.5;
+    const r = size + random() * 0.09 + (lift < -0.2 ? 0.03 : 0);
+    const reach = 0.95 - r + (random() - 0.5) * 0.07;
+    add(Math.cos(angle) * ring * reach, lift * reach, Math.sin(angle) * ring * reach, r, detail);
+  }
+  return lobes;
+}
+
+const LIGHT_SHELL = 11;
+const LIGHT_SIZE = 0.35;
+
+const LEAF_DEEP = srgb('#173723');
+const LEAF_MID = srgb('#2f6243');
+const LEAF_SUN = srgb('#52834f');
+const LEAF_WARM = srgb('#3f6a3c');
+const LEAF_COOL = srgb('#2a5e4a');
+
+const TINTS = [srgb('#f4f7de'), srgb('#ffffff'), srgb('#e2efe8')];
+
+export function treeTint(key: number, lift = 1, out = new THREE.Color()): THREE.Color {
+  let hash = Math.imul((key | 0) ^ 0x9e3779b9, 0x85ebca6b) >>> 0;
+  hash = (hash ^ (hash >>> 13)) >>> 0;
+  hash = Math.imul(hash, 0xc2b2ae35) >>> 0;
+  hash = (hash ^ (hash >>> 16)) >>> 0;
+  return out.copy(TINTS[hash % TINTS.length]).multiplyScalar(lift);
+}
+
+const treeCache = new Map<boolean, { crown: THREE.BufferGeometry; trunk: THREE.BufferGeometry }>();
+
+export function buildTree(options: { light?: boolean } = {}): { crown: THREE.BufferGeometry; trunk: THREE.BufferGeometry } {
+  const light = options.light === true;
+  let cached = treeCache.get(light);
+  if (!cached) {
+    cached = { crown: buildCrown(light), trunk: buildTrunk(light) };
+    treeCache.set(light, cached);
+  }
+  return { crown: cached.crown.clone(), trunk: cached.trunk.clone() };
+}
+
+function probes(count: number): THREE.Vector3[] {
+  const list: THREE.Vector3[] = [];
+  for (let index = 0; index < count; index += 1) {
+    const y = 1 - ((index + 0.5) / count) * 2;
+    const ring = Math.sqrt(1 - y * y);
+    const angle = index * 2.39996;
+    list.push(new THREE.Vector3(Math.cos(angle) * ring, y, Math.sin(angle) * ring));
+  }
+  return list;
+}
+
+function blocked(lobes: Lobe[], skip: number, x: number, y: number, z: number, dir: THREE.Vector3, far: number): boolean {
+  for (let index = 0; index < lobes.length; index += 1) {
+    if (index === skip) continue;
+    const lobe = lobes[index];
+    const ox = x - lobe.x;
+    const oy = (y - lobe.y) / lobe.tall;
+    const oz = z - lobe.z;
+    const dx = dir.x;
+    const dy = dir.y / lobe.tall;
+    const dz = dir.z;
+    const radius = lobe.r * 0.94;
+    const a = dx * dx + dy * dy + dz * dz;
+    const b = 2 * (ox * dx + oy * dy + oz * dz);
+    const c = ox * ox + oy * oy + oz * oz - radius * radius;
+    if (c < 0) return true;
+    const disc = b * b - 4 * a * c;
+    if (disc < 0) continue;
+    const t = (-b - Math.sqrt(disc)) / (2 * a);
+    if (t > 0 && t < far) return true;
+  }
+  return false;
+}
+
+function buildCrown(light: boolean): THREE.BufferGeometry {
+  const lobes = light ? crownLobes(LIGHT_SHELL, 1, LIGHT_SIZE) : crownLobes(17, 2, 0.29);
+  const positions: number[] = [];
+  const owners: number[] = [];
+  const indices: number[] = [];
+  lobes.forEach((lobe, which) => {
+    const raw = new THREE.IcosahedronGeometry(1, lobe.detail);
+    raw.deleteAttribute('normal');
+    raw.deleteAttribute('uv');
+    const sphere = mergeVertices(raw, 1e-5);
+    raw.dispose();
+    const place = sphere.getAttribute('position');
+    const index = sphere.getIndex();
+    const offset = positions.length / 3;
+    for (let at = 0; at < place.count; at += 1) {
+      const dx = place.getX(at);
+      const dy = place.getY(at);
+      const dz = place.getZ(at);
+      const length = Math.hypot(dx, dy, dz);
+      const reach = lobeReach(lobe, dx / length, dy / length, dz / length);
+      lobe.dirs.push(dx / length, dy / length, dz / length);
+      lobe.reaches.push(reach);
+      positions.push(lobe.x + (dx / length) * reach, lobe.y + (dy / length) * reach * lobe.tall, lobe.z + (dz / length) * reach);
+      owners.push(which);
+    }
+    if (index) for (let at = 0; at < index.count; at += 1) indices.push(index.getX(at) + offset);
+    sphere.dispose();
+  });
+
+  const full = new THREE.BufferGeometry();
+  full.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  full.setIndex(indices);
+  full.computeVertexNormals();
+  const normals = full.getAttribute('normal');
+
+  const count = positions.length / 3;
+  const hidden: boolean[] = new Array(count).fill(false);
+  for (let at = 0; at < count; at += 1) {
+    for (let other = 0; other < lobes.length; other += 1) {
+      if (other !== owners[at] && meshDepth(lobes[other], positions[at * 3], positions[at * 3 + 1], positions[at * 3 + 2]) > 0.03) {
+        hidden[at] = true;
+        break;
+      }
+    }
+  }
+
+  const covered = (skip: number, x: number, y: number, z: number) => {
+    for (let other = 0; other < lobes.length; other += 1) {
+      if (other !== skip && meshDepth(lobes[other], x, y, z) > 0.03) return true;
+    }
+    return false;
+  };
+  const kept: number[] = [];
+  const weights = [
+    [0.5, 0.5, 0],
+    [0, 0.5, 0.5],
+    [0.5, 0, 0.5],
+    [1 / 3, 1 / 3, 1 / 3],
+  ];
+  for (let at = 0; at < indices.length; at += 3) {
+    const a = indices[at];
+    const b = indices[at + 1];
+    const c = indices[at + 2];
+    let buried = hidden[a] && hidden[b] && hidden[c];
+    if (buried) {
+      for (const [wa, wb, wc] of weights) {
+        const x = positions[a * 3] * wa + positions[b * 3] * wb + positions[c * 3] * wc;
+        const y = positions[a * 3 + 1] * wa + positions[b * 3 + 1] * wb + positions[c * 3 + 1] * wc;
+        const z = positions[a * 3 + 2] * wa + positions[b * 3 + 2] * wb + positions[c * 3 + 2] * wc;
+        if (!covered(owners[a], x, y, z)) {
+          buried = false;
+          break;
+        }
+      }
+    }
+    if (!buried) kept.push(a, b, c);
+  }
+
+  const colors: number[] = new Array(count * 3).fill(0);
+  const bent: number[] = new Array(count * 3).fill(0);
+  const done: boolean[] = new Array(count).fill(false);
+  const mottle = waves(seeded(77), 5, 7, 11, 1);
+  const rays = probes(40);
+  const tint = new THREE.Color();
+  const tone = new THREE.Color();
+  const facing = new THREE.Vector3();
+  const volume = new THREE.Vector3();
+  let lowest = Infinity;
+  let highest = -Infinity;
+  for (let at = 0; at < count; at += 1) {
+    lowest = Math.min(lowest, positions[at * 3 + 1]);
+    highest = Math.max(highest, positions[at * 3 + 1]);
+  }
+  for (const at of kept) {
+    if (done[at]) continue;
+    done[at] = true;
+    const x = positions[at * 3];
+    const y = positions[at * 3 + 1];
+    const z = positions[at * 3 + 2];
+    const mine = owners[at];
+    facing.set(normals.getX(at), normals.getY(at), normals.getZ(at));
+    let open = 0;
+    let total = 0;
+    for (const ray of rays) {
+      const weight = ray.dot(facing);
+      if (weight <= 0.02) continue;
+      total += weight;
+      if (!blocked(lobes, mine, x + facing.x * 0.01, y + facing.y * 0.01, z + facing.z * 0.01, ray, 1.2)) open += weight;
+    }
+    open = total > 0 ? open / total : 1;
+    const rise = (y - lowest) / (highest - lowest);
+    let light = 0.06 + 0.62 * open + 0.16 * facing.y + 0.24 * (rise - 0.45);
+    light += (0.05 * field(mottle, x, y, z)) / 3;
+    light = clamp(light);
+    if (light < 0.5) blend(LEAF_DEEP, LEAF_MID, light / 0.5, tint);
+    else blend(LEAF_MID, LEAF_SUN, (light - 0.5) / 0.5, tint);
+    const lean = lobes[mine].tone;
+    blend(tint, lean > 0 ? LEAF_WARM : LEAF_COOL, Math.abs(lean) * 0.25 * (0.4 + light), tone);
+    colors[at * 3] = tone.r;
+    colors[at * 3 + 1] = tone.g;
+    colors[at * 3 + 2] = tone.b;
+    volume.set(x, y, z).normalize();
+    facing.multiplyScalar(0.68).addScaledVector(volume, 0.32).normalize();
+    bent[at * 3] = facing.x;
+    bent[at * 3 + 1] = facing.y;
+    bent[at * 3 + 2] = facing.z;
+  }
+
+  const remap = new Map<number, number>();
+  const outPositions: number[] = [];
+  const outNormals: number[] = [];
+  const outColors: number[] = [];
+  const outIndex: number[] = [];
+  let radius = 0;
+  let middle = 0;
+  let top = -Infinity;
+  let bottom = Infinity;
+  for (const vertex of kept) {
+    top = Math.max(top, positions[vertex * 3 + 1]);
+    bottom = Math.min(bottom, positions[vertex * 3 + 1]);
+  }
+  middle = (top + bottom) / 2;
+  for (const vertex of kept) radius = Math.max(radius, Math.hypot(positions[vertex * 3], positions[vertex * 3 + 1] - middle, positions[vertex * 3 + 2]));
+  const fit = 0.995 / radius;
+  for (const vertex of kept) {
+    let next = remap.get(vertex);
+    if (next === undefined) {
+      next = outPositions.length / 3;
+      remap.set(vertex, next);
+      outPositions.push(positions[vertex * 3] * fit, (positions[vertex * 3 + 1] - middle) * fit, positions[vertex * 3 + 2] * fit);
+      outNormals.push(bent[vertex * 3], bent[vertex * 3 + 1], bent[vertex * 3 + 2]);
+      outColors.push(colors[vertex * 3], colors[vertex * 3 + 1], colors[vertex * 3 + 2]);
+    }
+    outIndex.push(next);
+  }
+  full.dispose();
+
+  const crown = new THREE.BufferGeometry();
+  crown.setAttribute('position', new THREE.Float32BufferAttribute(outPositions, 3));
+  crown.setAttribute('normal', new THREE.Float32BufferAttribute(outNormals, 3));
+  crown.setAttribute('color', new THREE.Float32BufferAttribute(outColors, 3));
+  crown.setIndex(outIndex);
+  crown.computeBoundingSphere();
+  crown.computeBoundingBox();
+  return crown;
+}
+
+type Ring = { at: THREE.Vector3; radius: (angle: number) => number; color: (angle: number) => THREE.Color };
+
+function sweep(builder: Builder, rings: Ring[], sides: number, tip: THREE.Vector3 | null, tipColor: THREE.Color | null, level = false): void {
+  const tangent = new THREE.Vector3();
+  const normal = new THREE.Vector3();
+  const binormal = new THREE.Vector3();
+  const helper = new THREE.Vector3();
+  const starts: number[] = [];
+  rings.forEach((ring, step) => {
+    const before = rings[Math.max(0, step - 1)].at;
+    const after = rings[Math.min(rings.length - 1, step + 1)].at;
+    tangent.subVectors(after, before).normalize();
+    if (level) {
+      normal.set(1, 0, 0);
+      binormal.set(0, 0, -1);
+    } else if (step === 0) {
+      helper.set(0, 0, 1);
+      if (Math.abs(tangent.z) > 0.9) helper.set(1, 0, 0);
+      normal.crossVectors(helper, tangent).normalize();
+    } else {
+      normal.sub(helper.copy(tangent).multiplyScalar(normal.dot(tangent))).normalize();
+    }
+    if (!level) binormal.crossVectors(tangent, normal).normalize();
+    starts.push(builder.positions.length / 3);
+    for (let side = 0; side < sides; side += 1) {
+      const angle = (side / sides) * Math.PI * 2;
+      const r = ring.radius(angle);
+      const cx = Math.cos(angle) * r;
+      const sz = Math.sin(angle) * r;
+      builder.vertex(
+        ring.at.x + normal.x * cx + binormal.x * sz,
+        ring.at.y + normal.y * cx + binormal.y * sz,
+        ring.at.z + normal.z * cx + binormal.z * sz,
+        ring.color(angle),
+      );
+    }
+  });
+  for (let step = 0; step + 1 < rings.length; step += 1) {
+    const a = starts[step];
+    const b = starts[step + 1];
+    for (let side = 0; side < sides; side += 1) {
+      const next = (side + 1) % sides;
+      builder.quad(a + side, a + next, b + next, b + side);
+    }
+  }
+  if (tip) {
+    const last = starts[starts.length - 1];
+    const point = builder.vertex(tip.x, tip.y, tip.z, tipColor ?? undefined);
+    for (let side = 0; side < sides; side += 1) builder.triangle(last + side, last + ((side + 1) % sides), point);
+  }
+}
+
+const BARK = srgb('#5b4a3a');
+const BARK_DARK = srgb('#463729');
+const BARK_LIGHT = srgb('#6a5743');
+
+function buildTrunk(light: boolean): THREE.BufferGeometry {
+  const builder = new Builder();
+  const random = seeded(4242);
+  const sides = light ? 7 : 10;
+  const steps = light ? [0, 0.03, 0.1, 0.35, 0.65, 1] : [0, 0.012, 0.03, 0.06, 0.11, 0.2, 0.32, 0.45, 0.58, 0.72, 0.86, 1];
+  const sway = waves(random, 3, 4, 7, 0.018);
+  const grain = random() * Math.PI * 2;
+  const shade = new THREE.Color();
+  const rings: Ring[] = steps.map((t) => {
+    const y = t - 0.5;
+    const at = new THREE.Vector3(field(sway, 0, t * 1.7, 0.3), y, field(sway, 0.6, t * 1.7, 0));
+    const taper = 0.26 - 0.1 * t;
+    const flare = 0.12 * Math.exp(-t / 0.035);
+    return {
+      at,
+      radius: (angle: number) => taper + flare * (0.7 + 0.3 * Math.cos(5 * angle + grain)) + 0.008 * Math.cos(3 * angle + t * 9),
+      color: (angle: number) => {
+        const ground = 1 - smooth(0, 0.08, t);
+        const canopy = smooth(0.55, 1, t);
+        const ridge = 0.5 + 0.5 * Math.cos(5 * angle + grain + t * 4);
+        blend(BARK, BARK_LIGHT, ridge * 0.45 * (1 - canopy), shade);
+        return blend(shade, BARK_DARK, Math.max(ground * 0.8, canopy * 0.7), new THREE.Color());
+      },
+    };
+  });
+  sweep(builder, rings, sides, null, null, true);
+
+  const limbs = [
+    { from: 0.3, angle: grain, lean: 0.8, size: 0.13 },
+    { from: 0.36, angle: grain + 2.3, lean: 0.72, size: 0.12 },
+    { from: 0.44, angle: grain + 4.1, lean: 0.62, size: 0.1 },
+  ];
+  for (const limb of light ? limbs.slice(0, 2) : limbs) {
+    const start = new THREE.Vector3(field(sway, 0, limb.from * 1.7, 0.3), limb.from - 0.5, field(sway, 0.6, limb.from * 1.7, 0));
+    const reach = new THREE.Vector3(Math.cos(limb.angle) * limb.lean, 0.46, Math.sin(limb.angle) * limb.lean);
+    const span = reach.y - start.y;
+    const path: Ring[] = [];
+    const count = light ? 2 : 4;
+    for (let step = 0; step <= count; step += 1) {
+      const s = step / count;
+      const bend = Math.pow(s, 0.45);
+      const point = new THREE.Vector3(start.x + (reach.x - start.x) * bend, start.y + span * s, start.z + (reach.z - start.z) * bend);
+      const radius = limb.size * (1 - 0.7 * s);
+      path.push({
+        at: point,
+        radius: () => radius,
+        color: () => blend(BARK, BARK_DARK, 0.4 + 0.5 * s, new THREE.Color()),
+      });
+    }
+    const end = path[count].at;
+    const tip = end.clone().add(new THREE.Vector3(Math.cos(limb.angle) * 0.04, 0.03, Math.sin(limb.angle) * 0.04));
+    sweep(builder, path, light ? 5 : 6, tip, blend(BARK, BARK_DARK, 0.9, new THREE.Color()));
+  }
+  return builder.geometry();
+}
+
+export function buildSail(wide: number, deep: number, height: number): { cloth: THREE.BufferGeometry; posts: THREE.BufferGeometry } {
+  const w = Math.max(wide, 0.1);
+  const d = Math.max(deep, 0.1);
+  const twist = clamp(Math.min(w, d) / 8, 0.15, 1);
+  const high = height + 0.9 * twist;
+  const low = height - 0.7 * twist;
+  const sagAcross = Math.min(0.065 * d, w * 0.18);
+  const sagAlong = Math.min(0.065 * w, d * 0.18);
+  const cuts = 16;
+  const cloth = new Builder();
+  const lift = (u: number, v: number) => high * (1 - u) * (1 - v) + low * u * (1 - v) + high * u * v + low * (1 - u) * v;
+  const spot = (u: number, v: number): [number, number, number] => {
+    const x = -w / 2 + u * w + (1 - 2 * u) * sagAcross * 4 * v * (1 - v);
+    const z = -d / 2 + v * d + (1 - 2 * v) * sagAlong * 4 * u * (1 - u);
+    const belly = 0.012 * Math.min(w, d) * Math.sin(Math.PI * u) * Math.sin(Math.PI * v);
+    return [x, lift(u, v) - belly, z];
+  };
+  for (let row = 0; row <= cuts; row += 1) {
+    for (let column = 0; column <= cuts; column += 1) {
+      const [x, y, z] = spot(column / cuts, row / cuts);
+      cloth.vertex(x, y, z);
+    }
+  }
+  for (let row = 0; row < cuts; row += 1) {
+    for (let column = 0; column < cuts; column += 1) {
+      const a = row * (cuts + 1) + column;
+      const b = a + 1;
+      const c = a + cuts + 2;
+      const e = a + cuts + 1;
+      if ((row + column) % 2 === 0) cloth.quad(a, e, c, b);
+      else {
+        cloth.triangle(a, e, b);
+        cloth.triangle(b, e, c);
+      }
+    }
+  }
+
+  const posts = new Builder();
+  const corners: [number, number][] = [
+    [0, 0],
+    [1, 0],
+    [1, 1],
+    [0, 1],
+  ];
+  const rake = Math.tan((5 * Math.PI) / 180);
+  for (const [u, v] of corners) {
+    const [cx, cy, cz] = spot(u, v);
+    const out = new THREE.Vector2(cx, cz).normalize();
+    const gap = 0.32;
+    const attach = new THREE.Vector3(cx + out.x * gap, cy, cz + out.y * gap);
+    const axis = new THREE.Vector3(out.x * rake, 1, out.y * rake).normalize();
+    const foot = attach.clone().addScaledVector(axis, -cy / axis.y);
+    const head = attach.clone().addScaledVector(axis, 0.42 / axis.y);
+    cylinder(posts, foot, head, 0.09, 10, true);
+    cylinder(posts, foot.clone().setY(-0.05), foot.clone().setY(0.08), 0.24, 10, true);
+    cylinder(posts, new THREE.Vector3(cx, cy, cz), attach, 0.028, 6, false);
+    cylinder(posts, attach.clone().addScaledVector(axis, -0.07), attach.clone().addScaledVector(axis, 0.07), 0.12, 10, true);
+  }
+  return { cloth: cloth.geometry(), posts: posts.geometry() };
+}
+
+function cylinder(builder: Builder, from: THREE.Vector3, to: THREE.Vector3, radius: number, sides: number, capped: boolean): void {
+  const axis = new THREE.Vector3().subVectors(to, from).normalize();
+  const helper = Math.abs(axis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
+  const across = new THREE.Vector3().crossVectors(axis, helper).normalize();
+  const other = new THREE.Vector3().crossVectors(axis, across).normalize();
+  const ring = (center: THREE.Vector3) => {
+    const start = builder.positions.length / 3;
+    for (let side = 0; side < sides; side += 1) {
+      const angle = (side / sides) * Math.PI * 2;
+      const c = Math.cos(angle) * radius;
+      const s = Math.sin(angle) * radius;
+      builder.vertex(center.x + across.x * c + other.x * s, center.y + across.y * c + other.y * s, center.z + across.z * c + other.z * s);
+    }
+    return start;
+  };
+  const a = ring(from);
+  const b = ring(to);
+  for (let side = 0; side < sides; side += 1) {
+    const next = (side + 1) % sides;
+    builder.quad(a + side, a + next, b + next, b + side);
+  }
+  if (!capped) return;
+  const top = ring(to);
+  const middle = builder.vertex(to.x, to.y, to.z);
+  for (let side = 0; side < sides; side += 1) builder.triangle(top + side, top + ((side + 1) % sides), middle);
+}
+
+function box(builder: Builder, center: THREE.Vector3, along: THREE.Vector3, across: THREE.Vector3, long: number, wide: number, low: number, high: number): void {
+  const corner = (su: number, sv: number, y: number) => new THREE.Vector3(center.x + along.x * su * long * 0.5 + across.x * sv * wide * 0.5, y, center.z + along.z * su * long * 0.5 + across.z * sv * wide * 0.5);
+  const face = (points: THREE.Vector3[]) => {
+    const start = builder.positions.length / 3;
+    for (const point of points) builder.vertex(point.x, point.y, point.z);
+    const ab = new THREE.Vector3().subVectors(points[1], points[0]);
+    const ac = new THREE.Vector3().subVectors(points[2], points[0]);
+    const facing = new THREE.Vector3().crossVectors(ab, ac);
+    const middle = points.reduce((sum, point) => sum.add(point), new THREE.Vector3()).multiplyScalar(0.25);
+    const outward = middle.sub(new THREE.Vector3(center.x, (low + high) / 2, center.z));
+    if (facing.dot(outward) >= 0) builder.quad(start, start + 1, start + 2, start + 3);
+    else builder.quad(start, start + 3, start + 2, start + 1);
+  };
+  const p = [corner(-1, -1, low), corner(1, -1, low), corner(1, 1, low), corner(-1, 1, low)];
+  const q = [corner(-1, -1, high), corner(1, -1, high), corner(1, 1, high), corner(-1, 1, high)];
+  face([q[0], q[1], q[2], q[3]]);
+  face([p[0], p[1], q[1], q[0]]);
+  face([p[1], p[2], q[2], q[1]]);
+  face([p[2], p[3], q[3], q[2]]);
+  face([p[3], p[0], q[0], q[3]]);
+}
+
+function inside(ring: [number, number][], x: number, y: number): boolean {
+  let hit = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
+  }
+  return hit;
+}
+
+function edgeGap(ring: [number, number][], x: number, y: number): number {
+  let best = Infinity;
+  for (let i = 0; i < ring.length; i += 1) {
+    const [ax, ay] = ring[i];
+    const [bx, by] = ring[(i + 1) % ring.length];
+    const dx = bx - ax;
+    const dy = by - ay;
+    const span = dx * dx + dy * dy;
+    const t = span > 0 ? clamp(((x - ax) * dx + (y - ay) * dy) / span) : 0;
+    best = Math.min(best, Math.hypot(x - ax - dx * t, y - ay - dy * t));
+  }
+  return best;
+}
+
+function tidy(ring: [number, number][]): [number, number][] {
+  const out: [number, number][] = [];
+  for (const point of ring) {
+    const last = out[out.length - 1];
+    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) > 1e-6) out.push(point);
+  }
+  if (out.length > 1 && Math.hypot(out[0][0] - out[out.length - 1][0], out[0][1] - out[out.length - 1][1]) < 1e-6) out.pop();
+  return out;
+}
+
+export function buildRoofUnits(
+  blocks: { ring: [number, number][]; height: number }[],
+  toScene: (x: number, y: number) => [number, number, number],
+): THREE.BufferGeometry | null {
+  const builder = new Builder();
+  let placed = 0;
+  for (const block of blocks) {
+    const ring = tidy(block.ring);
+    if (ring.length < 3) continue;
+    let twice = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let longest = 0;
+    let ux = 1;
+    let uy = 0;
+    for (let i = 0; i < ring.length; i += 1) {
+      const [ax, ay] = ring[i];
+      const [bx, by] = ring[(i + 1) % ring.length];
+      const cross = ax * by - bx * ay;
+      twice += cross;
+      sumX += (ax + bx) * cross;
+      sumY += (ay + by) * cross;
+      const length = Math.hypot(bx - ax, by - ay);
+      if (length > longest) {
+        longest = length;
+        ux = (bx - ax) / length;
+        uy = (by - ay) / length;
+      }
+    }
+    const area = Math.abs(twice) / 2;
+    if (area < 500) continue;
+    const wanted = Math.min(14, Math.max(1, Math.round(area / 700)));
+    const midX = Math.abs(twice) > 1e-9 ? sumX / (3 * twice) : ring.reduce((sum, point) => sum + point[0], 0) / ring.length;
+    const midY = Math.abs(twice) > 1e-9 ? sumY / (3 * twice) : ring.reduce((sum, point) => sum + point[1], 0) / ring.length;
+    const vx = -uy;
+    const vy = ux;
+    let lowU = Infinity;
+    let highU = -Infinity;
+    let lowV = Infinity;
+    let highV = -Infinity;
+    for (const [x, y] of ring) {
+      const u = (x - midX) * ux + (y - midY) * uy;
+      const v = (x - midX) * vx + (y - midY) * vy;
+      lowU = Math.min(lowU, u);
+      highU = Math.max(highU, u);
+      lowV = Math.min(lowV, v);
+      highV = Math.max(highV, v);
+    }
+    const random = seeded(Math.round(area * 13) ^ Math.round(ring[0][0] * 97) ^ Math.round(ring[0][1] * 31));
+    const stepU = 7;
+    const stepV = 5.5;
+    const columns = Math.floor((highU - lowU) / stepU);
+    const rows = Math.floor((highV - lowV) / stepV);
+    const startU = (lowU + highU) / 2 - (columns * stepU) / 2;
+    const startV = (lowV + highV) / 2 - (rows * stepV) / 2;
+    type Unit = { u: number; v: number; long: number; wide: number; tall: number; fans: number; rank: number };
+    const options: Unit[] = [];
+    for (let row = 0; row <= rows; row += 1) {
+      for (let column = 0; column <= columns; column += 1) {
+        const long = 2 + random() * 2;
+        const wide = 1.5 + random() * 1;
+        const tall = 1 + random() * 0.6;
+        const fans = long > 3.1 ? 2 : random() > 0.45 ? 1 : 0;
+        const u = startU + column * stepU + (random() - 0.5) * 1.2;
+        const v = startV + row * stepV + (random() - 0.5) * 0.6;
+        let fits = true;
+        for (const su of [-1, 0, 1]) {
+          for (const sv of [-1, 0, 1]) {
+            const pu = u + su * long * 0.5;
+            const pv = v + sv * wide * 0.5;
+            const x = midX + pu * ux + pv * vx;
+            const y = midY + pu * uy + pv * vy;
+            if (!inside(ring, x, y) || edgeGap(ring, x, y) < 4) fits = false;
+          }
+        }
+        if (fits) options.push({ u, v, long, wide, tall, fans, rank: Math.hypot(u, v * 1.4) + random() * 2 });
+      }
+    }
+    options.sort((a, b) => a.rank - b.rank);
+    for (const unit of options.slice(0, wanted)) {
+      const x = midX + unit.u * ux + unit.v * vx;
+      const y = midY + unit.u * uy + unit.v * vy;
+      const [sx, , sz] = toScene(x, y);
+      const [tx, , tz] = toScene(x + ux, y + uy);
+      const along = new THREE.Vector3(tx - sx, 0, tz - sz).normalize();
+      const across = new THREE.Vector3(-along.z, 0, along.x);
+      const center = new THREE.Vector3(sx, 0, sz);
+      const base = block.height;
+      box(builder, center, along, across, unit.long, unit.wide, base, base + unit.tall);
+      const fan = Math.min(unit.wide * 0.32, 0.62);
+      for (let index = 0; index < unit.fans; index += 1) {
+        const shift = unit.fans === 2 ? (index === 0 ? -0.25 : 0.25) * unit.long : 0;
+        const spot = center.clone().addScaledVector(along, shift);
+        cylinder(builder, new THREE.Vector3(spot.x, base + unit.tall - 0.02, spot.z), new THREE.Vector3(spot.x, base + unit.tall + 0.22, spot.z), fan, 12, true);
+      }
+      placed += 1;
+    }
+  }
+  if (placed === 0) return null;
+  return builder.geometry();
+}
+
+const WALL_VERTEX_HEAD = `#include <common>
+varying vec3 vWallPos;
+varying vec3 vWallNormal;
+varying float vWallLift;
+varying float vWallRaised;
+varying float vWallHigh;`;
+
+const WALL_VERTEX_BODY = `#include <worldpos_vertex>
+vec4 wallWorld = vec4( transformed, 1.0 );
+vec3 wallNormal = objectNormal;
+#ifdef USE_BATCHING
+wallWorld = batchingMatrix * wallWorld;
+wallNormal = mat3( batchingMatrix ) * wallNormal;
+#endif
+#ifdef USE_INSTANCING
+wallWorld = instanceMatrix * wallWorld;
+wallNormal = mat3( instanceMatrix ) * wallNormal;
+#endif
+wallWorld = modelMatrix * wallWorld;
+vWallPos = wallWorld.xyz;
+vWallNormal = normalize( mat3( modelMatrix ) * wallNormal );
+vWallHigh = transformed.y;
+vWallRaised = step( 0.05, transformed.y );
+vWallLift = transformed.y * vWallRaised;`;
+
+const WALL_FRAGMENT_HEAD = `#include <common>
+varying vec3 vWallPos;
+varying vec3 vWallNormal;
+varying float vWallLift;
+varying float vWallRaised;
+varying float vWallHigh;`;
+
+const WALL_FRAGMENT_BODY = `#include <color_fragment>
+vec3 wallN = normalize( vWallNormal );
+float wallRoof = smoothstep( 0.55, 0.85, wallN.y );
+float wallSide = 1.0 - smoothstep( 0.25, 0.5, abs( wallN.y ) );
+vec2 wallFlat = vec2( -wallN.z, wallN.x );
+vec2 wallDir = wallFlat / max( length( wallFlat ), 1e-4 );
+float wallAlong = dot( vWallPos.xz, wallDir );
+float wallHigh = vWallHigh;
+float wallTop = vWallLift / max( vWallRaised, 1e-4 );
+float wallStepU = max( fwidth( wallAlong ), 1e-4 );
+float wallStepY = max( fwidth( wallHigh ), 1e-4 );
+float wallPx = max( wallStepU, wallStepY );
+float wallFade = wallSide * ( 1.0 - smoothstep( 0.16, 0.45, wallPx ) );
+float wallFine = 1.0 - smoothstep( 0.025, 0.07, wallPx );
+float wallStorey = 4.2;
+float wallLevel = floor( wallHigh / wallStorey );
+float wallIn = wallHigh - wallLevel * wallStorey;
+float wallRoom = step( wallLevel * wallStorey + 3.3, wallTop );
+float wallBand = smoothstep( 1.0 - wallStepY, 1.0 + wallStepY, wallIn ) * ( 1.0 - smoothstep( 2.7 - wallStepY, 2.7 + wallStepY, wallIn ) );
+float wallBay = 3.6;
+float wallOff = abs( fract( wallAlong / wallBay ) - 0.5 ) * wallBay;
+float wallPane = 1.0 - smoothstep( 1.3 - wallStepU, 1.3 + wallStepU, wallOff );
+float wallMullion = 1.0 - smoothstep( 0.035 - wallStepU, 0.035 + wallStepU, wallOff );
+float wallTransom = 1.0 - smoothstep( 0.03 - wallStepY, 0.03 + wallStepY, abs( wallIn - 2.15 ) );
+float wallGlass = wallBand * wallPane * wallRoom * wallFade;
+float wallFrame = max( wallMullion, wallTransom ) * wallGlass * wallFine;
+float wallSill = ( 1.0 - smoothstep( 0.06 - wallStepY, 0.06 + wallStepY, abs( wallIn - 0.94 ) ) ) * wallPane * wallRoom * wallFade * wallFine;
+float wallBase = ( 1.0 - smoothstep( 0.5 - wallStepY, 0.5 + wallStepY, wallHigh ) ) * wallFade;
+diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.7, 0.77, 0.83 ), wallGlass * ( 1.0 - wallFrame ) );
+diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * 0.9, wallSill );
+diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.84, 0.86, 0.86 ), wallBase );
+diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.91, 0.935, 0.965 ), wallRoof );`;
+
+const WALL_ROUGHNESS = `#include <roughnessmap_fragment>
+roughnessFactor = mix( roughnessFactor, 0.55, wallGlass * ( 1.0 - wallFrame ) );`;
+
+export function enhanceWalls(material: THREE.MeshStandardMaterial): void {
+  material.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', WALL_VERTEX_HEAD).replace('#include <worldpos_vertex>', WALL_VERTEX_BODY);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', WALL_FRAGMENT_HEAD)
+      .replace('#include <color_fragment>', WALL_FRAGMENT_BODY)
+      .replace('#include <roughnessmap_fragment>', WALL_ROUGHNESS);
+  };
+  material.customProgramCacheKey = () => 'shady-walls-2';
+  material.needsUpdate = true;
+}
