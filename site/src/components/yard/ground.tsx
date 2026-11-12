@@ -38,6 +38,19 @@ const PROBE = 0.3;
 const BUCKET = 16;
 const BEND = Math.PI / 8;
 const RELIEF: Partial<Record<Surface, number>> = { grass: 1, soil: 1, concrete: 1, court: 1, track: 1, turf: 1, asphalt: -1 };
+const ALBEDO: Record<Surface, string> = {
+  grass: '#b7cf9c',
+  asphalt: '#b8bec1',
+  concrete: '#dedcd0',
+  turf: '#8cc39b',
+  court: '#8db6c9',
+  track: '#d0876f',
+  soil: '#cbb38f',
+  water: '#a8cfe0',
+  roof: '#dfe3e1',
+};
+const SHEEN: Partial<Record<Surface, number>> = { court: 0.1, asphalt: 0.06, track: 0.05, concrete: 0.05, turf: 0.03, grass: 0.02, soil: 0, water: 0.12 };
+const KINDS = (Object.keys(SURFACES) as Surface[]).sort((a, b) => SURFACES[a].code - SURFACES[b].code);
 
 const VERTEX = `
 attribute float aRise;
@@ -91,6 +104,9 @@ uniform float uAir;
 uniform vec3 uPaper;
 uniform vec3 uRoad;
 uniform vec3 uSun;
+uniform vec3 uEye;
+uniform vec3 uAlbedo[${KINDS.length}];
+uniform float uSheen[${KINDS.length}];
 varying vec2 vUv;
 varying float vRise;
 varying float vPaved;
@@ -177,18 +193,28 @@ void main() {
   float degrees = uAir + vRise * texture2D(uHeat, vUv).r * 1.275;
   float place = clamp((degrees - 30.0) * 1.25 / 255.0, 0.0, 1.0);
   vec3 hot = texture2D(uRamp, vec2(place, 0.5)).rgb;
-  hot = mix(hot, vec3(0.98, 0.985, 0.97), vLine * home * 0.55);
+  int kind = int(clamp(floor(vKind + 0.5), 0.0, ${(KINDS.length - 1).toFixed(1)}));
+  vec3 albedo = uAlbedo[kind];
+  float wash = clamp(0.18 + 0.72 * smoothstep(104.0, 140.0, degrees), 0.0, 0.9);
+  vec3 base = mix(albedo, hot, wash);
+  base = mix(base, vec3(0.98, 0.985, 0.97), vLine * home * 0.55);
   vec2 fw = fwidth(vWorld);
   float pixel = max(fw.x, fw.y);
   float near = 1.0 - smoothstep(0.08, 0.25, pixel);
   if (near > 0.0 && home > 0.0) {
     float tone = clamp(1.0 + grain(vWorld, fw, pixel) * near, 0.9, 1.06);
-    hot *= pow(tone * (1.0 + relief(pixel)), 2.2);
+    base *= pow(tone * (1.0 + relief(pixel)), 2.2);
   }
   vec3 away = mix(uPaper, uRoad, vPaved);
-  vec3 colour = mix(away, hot, home);
+  vec3 colour = mix(away, base, home);
   float contact = smoothstep(0.03, 0.55, texture2D(uContact, vUv).r);
-  colour = mix(colour, colour * vec3(0.80, 0.86, 0.88), 0.30 * contact);
+  colour = mix(colour, colour * vec3(0.72, 0.79, 0.83), 0.55 * contact);
+  vec3 sun = normalize(uSun);
+  vec3 viewDir = normalize(uEye - vec3(vWorld.x, 0.0, vWorld.y));
+  vec3 reflected = vec3(-sun.x, sun.y, -sun.z);
+  float glint = pow(max(dot(reflected, viewDir), 0.0), 18.0);
+  float sunUp = smoothstep(0.03, 0.3, sun.y);
+  colour += vec3(1.0, 0.97, 0.9) * glint * uSheen[kind] * sunUp * home;
   gl_FragColor = vec4(colour, 1.0);
   #include <colorspace_fragment>
 }
@@ -860,6 +886,9 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
         uMiddle: { value: new THREE.Vector2(yard.middle[0], yard.middle[1]) },
         uPixel: { value: 0.001 },
         uSun: { value: new THREE.Vector3(0, 1, 0) },
+        uEye: { value: new THREE.Vector3(0, 1, 0) },
+        uAlbedo: { value: KINDS.map((kind) => new THREE.Color(ALBEDO[kind])) },
+        uSheen: { value: KINDS.map((kind) => SHEEN[kind] ?? 0) },
       },
     });
   }, [yard, grid, heat, contact, texture, width, depth]);
@@ -885,6 +914,7 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
     const fov = camera.isPerspectiveCamera ? camera.fov : 30;
     const zoom = camera.isPerspectiveCamera ? camera.zoom : 1;
     material.uniforms.uPixel.value = (2 * Math.tan((fov * Math.PI) / 360)) / Math.max(1, state.gl.domElement.height * zoom);
+    camera.getWorldPosition(material.uniforms.uEye.value as THREE.Vector3);
     if (sunMinute.current !== yard.minute || sunOwner.current !== material) {
       sunMinute.current = yard.minute;
       sunOwner.current = material;
