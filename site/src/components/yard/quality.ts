@@ -1,13 +1,33 @@
 export type Tier = 'high' | 'medium' | 'low';
+export type PropLevel = 'full' | 'light' | 'none';
 
-export const TIERS: Record<Tier, { dpr: number; shadow: number; texture: number }> = {
-  high: { dpr: 2, shadow: 4096, texture: 2048 },
-  medium: { dpr: 1.5, shadow: 2048, texture: 2048 },
-  low: { dpr: 1, shadow: 1024, texture: 2048 },
+export const TIERS: Record<Tier, { dpr: number; shadow: number; texture: number; props: PropLevel }> = {
+  high: { dpr: 2, shadow: 4096, texture: 2048, props: 'full' },
+  medium: { dpr: 1.5, shadow: 2048, texture: 2048, props: 'light' },
+  low: { dpr: 1, shadow: 1024, texture: 2048, props: 'none' },
 };
 
 const ORDER: Tier[] = ['high', 'medium', 'low'];
 const KEY = 'shady.quality';
+
+export function powerChoice(): 'low-power' | 'high-performance' {
+  if (typeof window === 'undefined') return 'high-performance';
+  return new URLSearchParams(window.location.search).get('gpu') === 'low' ? 'low-power' : 'high-performance';
+}
+
+export function chipName(gl: WebGLRenderingContext | WebGL2RenderingContext | null): string {
+  if (!gl) return '';
+  const info = gl.getExtension('WEBGL_debug_renderer_info');
+  return info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : '';
+}
+
+export function shortChip(name: string): string {
+  const marker = 'Renderer: ';
+  const start = name.indexOf(marker);
+  const rest = start >= 0 ? name.slice(start + marker.length) : name;
+  const end = rest.indexOf(',');
+  return (end >= 0 ? rest.slice(0, end) : rest).trim();
+}
 
 function guess(): Tier {
   if (typeof window === 'undefined') return 'medium';
@@ -15,9 +35,9 @@ function guess(): Tier {
   const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory ?? 8;
   let chip = '';
   try {
-    const gl = document.createElement('canvas').getContext('webgl2');
-    const info = gl?.getExtension('WEBGL_debug_renderer_info');
-    chip = gl && info ? String(gl.getParameter(info.UNMASKED_RENDERER_WEBGL)) : '';
+    const gl = document.createElement('canvas').getContext('webgl2', { powerPreference: powerChoice() });
+    chip = chipName(gl);
+    gl?.getExtension('WEBGL_lose_context')?.loseContext();
   } catch {
     chip = '';
   }
