@@ -9,7 +9,7 @@ import type { PropLevel } from './quality';
 type Level = PropLevel;
 type Vec = [number, number, number];
 type Placement = { x: number; y: number; heading: number; stretch?: number; color?: THREE.Color };
-type Kind = 'cars' | 'poles' | 'nets' | 'goals' | 'people';
+type Kind = 'cars' | 'poles' | 'nets' | 'posts' | 'goals' | 'people';
 type Model = { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial };
 
 const CAR_SHARE = 0.52;
@@ -28,19 +28,20 @@ const COURT_EVERY = 3;
 const FIELD_PLAYERS = 22;
 const CARS = ['#eeeeea', '#c8ced1', '#454d53', '#8ea2b6', '#b8a78f', '#a65f54', '#74917f'];
 const CAR_WEIGHTS = [0.24, 0.22, 0.2, 0.09, 0.09, 0.08, 0.08];
-const CLAY = ['#f3f1ea', '#d9c7b4', '#9fb2c4', '#8fb1ab', '#c98f84', '#6d7c86'];
+const CLAY = ['#f3f1ea', '#e6d5c3', '#c3d0dc', '#bfd5d0', '#e2b7ae', '#d9d2c0'];
 const BAND_UNIFORM = CLAY[2];
 const BAND_FRONT = CLAY[0];
 const TEAM_HOME = CLAY[0];
 const TEAM_AWAY = CLAY[4];
 const STEEL = '#56655f';
 const NET = '#e8ece9';
+const NET_PANEL = '#f2f4f1';
+const NET_OPACITY = 0.42;
 const GOAL = '#e3d59a';
 const TYRE = 0.3;
 const SILL = 0.62;
 const GLASS: Vec = [0.3, 0.335, 0.37];
-const MESH = 0.9;
-const KINDS: Kind[] = ['cars', 'poles', 'nets', 'goals', 'people'];
+const KINDS: Kind[] = ['cars', 'poles', 'nets', 'posts', 'goals', 'people'];
 
 function hash(a: number, b: number, salt: number): number {
   let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(salt | 0, 0x9e3779b1);
@@ -72,14 +73,40 @@ function pick(list: string[], weights: number[], share: number): string {
   return list[list.length - 1];
 }
 
+function facing(points: Vec[], centre: Vec): Vec | undefined {
+  let nx = 0;
+  let ny = 0;
+  let nz = 0;
+  let mx = 0;
+  let my = 0;
+  let mz = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const [ax, ay, az] = points[index];
+    const [bx, by, bz] = points[(index + 1) % points.length];
+    nx += (ay - by) * (az + bz);
+    ny += (az - bz) * (ax + bx);
+    nz += (ax - bx) * (ay + by);
+    mx += ax;
+    my += ay;
+    mz += az;
+  }
+  const length = Math.hypot(nx, ny, nz);
+  if (length < 1e-12) return undefined;
+  const count = points.length;
+  const outward = nx * (mx / count - centre[0]) + ny * (my / count - centre[1]) + nz * (mz / count - centre[2]) >= 0 ? 1 : -1;
+  return [(nx / length) * outward, (ny / length) * outward, (nz / length) * outward];
+}
+
 class Clay {
   positions: number[] = [];
   shades: number[] = [];
+  normals: (Vec | undefined)[] = [];
   indices: number[] = [];
 
-  vertex(point: Vec, shade: Vec): number {
+  vertex(point: Vec, shade: Vec, normal?: Vec): number {
     this.positions.push(point[0], point[1], point[2]);
     this.shades.push(shade[0], shade[1], shade[2]);
+    this.normals.push(normal);
     return this.positions.length / 3 - 1;
   }
 
@@ -109,7 +136,8 @@ class Clay {
 
   face(points: Vec[], shade: number | Vec, centre: Vec): void {
     const tone: Vec = typeof shade === 'number' ? [shade, shade, shade] : shade;
-    const ids = points.map((point) => this.vertex(point, tone));
+    const normal = facing(points, centre);
+    const ids = points.map((point) => this.vertex(point, tone, normal));
     for (let index = 1; index + 1 < ids.length; index += 1) this.triangle(ids[0], ids[index], ids[index + 1], centre);
   }
 
@@ -192,6 +220,10 @@ class Clay {
     if (colored) geometry.setAttribute('color', new THREE.Float32BufferAttribute(this.shades, 3));
     geometry.setIndex(this.indices);
     geometry.computeVertexNormals();
+    const normal = geometry.getAttribute('normal');
+    this.normals.forEach((flat, index) => {
+      if (flat) normal.setXYZ(index, flat[0], flat[1], flat[2]);
+    });
     geometry.computeBoundingSphere();
     geometry.computeBoundingBox();
     return geometry;
@@ -278,21 +310,32 @@ function slab(clay: Clay, from: number, to: number, low: (z: number) => number, 
   clay.face(end, shade, centre);
 }
 
-function buildNet(): THREE.BufferGeometry {
+const NET_HALF = NET_WIDTH / 2;
+const NET_EDGE = NET_HALF - 0.04;
+const NET_HALVES = [
+  [-NET_EDGE, 0],
+  [0, NET_EDGE],
+];
+
+function netTop(z: number): number {
+  return 0.914 + (1.07 - 0.914) * Math.abs(z / NET_HALF);
+}
+
+function netTape(z: number): number {
+  return netTop(z) - 0.06;
+}
+
+function buildNetPanel(): THREE.BufferGeometry {
   const clay = new Clay();
-  const half = NET_WIDTH / 2;
-  const edge = half - 0.04;
-  const top = (z: number) => 0.914 + (1.07 - 0.914) * Math.abs(z / half);
-  const tape = (z: number) => top(z) - 0.06;
-  for (const [from, to] of [
-    [-edge, 0],
-    [0, edge],
-  ]) {
-    slab(clay, from, to, () => 0.03, tape, 0.02, MESH);
-    slab(clay, from, to, tape, top, 0.025, 1);
-  }
-  clay.tube([0, 0, -half], [0, 1.07, -half], 0.04, 6, 0.86);
-  clay.tube([0, 0, half], [0, 1.07, half], 0.04, 6, 0.86);
+  for (const [from, to] of NET_HALVES) slab(clay, from, to, () => 0.03, netTape, 0.02, 1);
+  return clay.geometry(false);
+}
+
+function buildNetFrame(): THREE.BufferGeometry {
+  const clay = new Clay();
+  for (const [from, to] of NET_HALVES) slab(clay, from, to, netTape, netTop, 0.025, 1);
+  clay.tube([0, 0, -NET_HALF], [0, 1.07, -NET_HALF], 0.04, 6, 0.86);
+  clay.tube([0, 0, NET_HALF], [0, 1.07, NET_HALF], 0.04, 6, 0.86);
   return clay.geometry(true);
 }
 
@@ -341,11 +384,16 @@ function material(color: string, shaded: boolean): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, vertexColors: shaded, roughness: 0.95, metalness: 0 });
 }
 
+function sheer(color: string, opacity: number): THREE.MeshStandardMaterial {
+  return new THREE.MeshStandardMaterial({ color, transparent: true, opacity, depthWrite: false, roughness: 0.95, metalness: 0 });
+}
+
 function buildModels(): Record<Kind, Model> {
   return {
     cars: { geometry: buildCar(), material: material('#ffffff', true) },
     poles: { geometry: buildPole(), material: material(STEEL, false) },
-    nets: { geometry: buildNet(), material: material(NET, true) },
+    nets: { geometry: buildNetPanel(), material: sheer(NET_PANEL, NET_OPACITY) },
+    posts: { geometry: buildNetFrame(), material: material(NET, true) },
     goals: { geometry: buildGoal(), material: material(GOAL, false) },
     people: { geometry: buildPerson(), material: material('#ffffff', false) },
   };
@@ -545,10 +593,12 @@ export function Props({ yard, level = 'full' }: { yard: Yard; level?: Level }) {
   const meshes = useMemo(() => {
     if (level === 'none') return [];
     const light = level === 'light';
+    const nets = placeNets(yard);
     const placed: Record<Kind, Placement[]> = {
       cars: placeCars(yard, CAR_CAP[level]),
       poles: placePoles(yard),
-      nets: placeNets(yard),
+      nets,
+      posts: nets,
       goals: placeGoals(yard),
       people: placePeople(yard, light),
     };
@@ -556,6 +606,7 @@ export function Props({ yard, level = 'full' }: { yard: Yard; level?: Level }) {
     return [
       ...KINDS.flatMap((kind) => {
         const mesh = instanced(yard, models[kind], placed[kind]);
+        if (mesh && models[kind].material.transparent) mesh.renderOrder = 2;
         return mesh ? [{ kind: kind as string, mesh }] : [];
       }),
       ...(shades ? [{ kind: 'car shades', mesh: shades }] : []),
