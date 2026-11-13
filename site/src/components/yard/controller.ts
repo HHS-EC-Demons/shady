@@ -303,6 +303,36 @@ export class Yard {
     return treeAt(this.campus.trees, x, y) >= 0 || treeAt(this.gone, x, y) >= 0;
   }
 
+  treeOnRay(origin: { x: number; y: number; z: number }, direction: { x: number; y: number; z: number }): Point | null {
+    if (!this.cutter || direction.y >= 0) return null;
+    let best: Point | null = null;
+    let nearest = Infinity;
+    const flat = direction.x * direction.x + direction.z * direction.z;
+    for (const tree of [...this.campus.trees, ...this.gone]) {
+      const [cx, , cz] = this.toScene(tree.x, tree.y);
+      const reach = Math.max(tree.radius, 2);
+      const ox = origin.x - cx;
+      const oz = origin.z - cz;
+      const off = ox * ox + oz * oz - reach * reach;
+      let enter = (tree.height - origin.y) / direction.y;
+      let leave = -origin.y / direction.y;
+      if (flat < 1e-9) {
+        if (off > 0) continue;
+      } else {
+        const half = (ox * direction.x + oz * direction.z) / flat;
+        const gap = half * half - off / flat;
+        if (gap < 0) continue;
+        enter = Math.max(enter, -half - Math.sqrt(gap));
+        leave = Math.min(leave, -half + Math.sqrt(gap));
+      }
+      if (enter <= leave && enter < nearest) {
+        nearest = enter;
+        best = [tree.x, tree.y];
+      }
+    }
+    return best;
+  }
+
   canPlant(x: number, y: number, skip?: number): boolean {
     const index = cellAt(this.ground.grid, x, y);
     if (index < 0 || !this.ground.open[index] || treeAt(this.campus.trees, x, y) >= 0) return false;

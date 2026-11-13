@@ -457,7 +457,8 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
       return;
     }
     const kind = yard.tool;
-    const id = kind === 'tree' ? yard.plant(x, y) : yard.startSail(x, y);
+    const [atX, atY] = (kind === 'tree' ? yard.treeOnRay(event.ray.origin, event.ray.direction) : null) ?? [x, y];
+    const id = kind === 'tree' ? yard.plant(atX, atY) : yard.startSail(x, y);
     if (id === null) return;
     drag.current = { kind, id };
     yard.setBusy(true);
@@ -477,7 +478,10 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
       return;
     }
     if (yard.busy) return;
-    if (yard.tool === 'tree') yard.hint(x, y);
+    if (yard.tool === 'tree') {
+      const [atX, atY] = yard.treeOnRay(event.ray.origin, event.ray.direction) ?? [x, y];
+      yard.hint(atX, atY);
+    }
     yard.probeAt(x, y);
   };
 
