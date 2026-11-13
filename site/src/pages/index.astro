@@ -27,7 +27,10 @@ const beats = [
   { id: 'plant', big: `${story.trees.length} trees`, small: `from ${dollars(story.cost.low)}, ${story.years} years` },
   { id: 'time', big: `${story.earlyTemp}°F`, small: `${story.place5}, ${clockLabel(story.early)}` },
 ];
-const stills = ['open', ...beats.map((beat) => beat.id), 'yours'].map((id) => `${base}beats/${id}.jpg`);
+const stills = ['open', ...beats.map((beat) => beat.id), 'yours'];
+const portrait = '(aspect-ratio < 1)';
+const wide = (id: string) => `${base}beats/${id}.jpg`;
+const tall = (id: string) => `${base}beats/${id}-tall.jpg`;
 ---
 
 <Base title="Shady" description="A 3D heat model of a real school. Scroll through one hot day, then plan the shade yourself." overlay>
@@ -49,9 +52,15 @@ const stills = ['open', ...beats.map((beat) => beat.id), 'yours'].map((id) => `$
       {
         stills.map((still, index) =>
           index === 0 ? (
-            <img class="film-poster" src={still} alt="" width="1600" height="1000" data-shown />
+            <picture>
+              <source media={portrait} srcset={tall(still)} width="780" height="1688" />
+              <img class="film-poster" src={wide(still)} alt="" width="1600" height="1000" data-shown />
+            </picture>
           ) : (
-            <img class="film-poster" data-src={still} alt="" width="1600" height="1000" />
+            <picture>
+              <source media={portrait} data-srcset={tall(still)} width="780" height="1688" />
+              <img class="film-poster" data-src={wide(still)} alt="" width="1600" height="1000" />
+            </picture>
           ),
         )
       }
@@ -59,13 +68,19 @@ const stills = ['open', ...beats.map((beat) => beat.id), 'yours'].map((id) => `$
     </div>
     <div class="film-beats">
       <section class="beat beat-open">
-        <img class="beat-still" src={`${base}beats/open.jpg`} alt="" width="1600" height="1000" />
+        <picture>
+          <source media={portrait} srcset={tall('open')} width="780" height="1688" />
+          <img class="beat-still" src={wide('open')} alt="" width="1600" height="1000" />
+        </picture>
         <h1 class="max-w-[9ch] text-[length:var(--fs-hero)]">Shade your school.</h1>
       </section>
       {
         beats.map((beat) => (
           <section class="beat">
-            <img class="beat-still" src={`${base}beats/${beat.id}.jpg`} alt="" width="1600" height="1000" loading="lazy" />
+            <picture>
+              <source media={portrait} srcset={tall(beat.id)} width="780" height="1688" />
+              <img class="beat-still" src={wide(beat.id)} alt="" width="1600" height="1000" loading="lazy" />
+            </picture>
             <div class="beat-words">
               <h2 class="beat-big">
                 <span>{beat.big}</span>
@@ -78,7 +93,10 @@ const stills = ['open', ...beats.map((beat) => beat.id), 'yours'].map((id) => `$
         ))
       }
       <section class="beat">
-        <img class="beat-still" src={`${base}beats/yours.jpg`} alt="" width="1600" height="1000" loading="lazy" />
+        <picture>
+          <source media={portrait} srcset={tall('yours')} width="780" height="1688" />
+          <img class="beat-still" src={wide('yours')} alt="" width="1600" height="1000" loading="lazy" />
+        </picture>
         <div class="beat-words">
           <h2 class="beat-plain">Now yours</h2>
           <div class="flex flex-wrap gap-3">
@@ -107,10 +125,20 @@ const stills = ['open', ...beats.map((beat) => beat.id), 'yours'].map((id) => `$
           watch.disconnect();
           if (frame) cancelAnimationFrame(frame);
           frame = 0;
+          setTimeout(drop, 2000);
+        }
+        function drop() {
+          for (var i = 0; i < posters.length; i++) {
+            var picture = posters[i].parentNode;
+            if (picture && picture.parentNode) picture.parentNode.removeChild(picture);
+          }
         }
         function reveal(index) {
           var poster = posters[index];
-          if (poster && !poster.getAttribute('src') && poster.dataset.src) poster.src = poster.dataset.src;
+          if (!poster || poster.getAttribute('src') || !poster.dataset.src) return;
+          var source = poster.previousElementSibling;
+          if (source && source.dataset.srcset) source.srcset = source.dataset.srcset;
+          poster.src = poster.dataset.src;
         }
         function show(index) {
           if (index !== wanted || index === current || film.dataset.mode !== 'loading') return;

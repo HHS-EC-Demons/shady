@@ -232,6 +232,11 @@
     margin-top: -100dvh;
   }
 
+  .film-stage > picture,
+  .beat > picture {
+    display: contents;
+  }
+
   .film-poster {
     position: absolute;
     inset: 0;
