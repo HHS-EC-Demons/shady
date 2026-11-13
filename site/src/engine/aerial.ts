@@ -32,10 +32,19 @@ export function applySight(campus: Campus, sight: Sight): Campus {
     const surface = calls.get(index);
     return surface && surface !== patch.surface ? { ...patch, surface } : patch;
   });
+  const tones = sight.tones;
+  const blocks =
+    tones && tones.length === campus.blocks.length
+      ? campus.blocks.map((block, index) => {
+          const tone = tones[index];
+          return tone && !block.top ? { ...block, tone } : block;
+        })
+      : campus.blocks;
   return {
     ...campus,
     trees: mergeTrees(campus, sight.trees),
     patches,
+    blocks,
     photo: { source: PHOTO_SOURCE, date: sight.date, fields: sight.fields.map((call) => call.patch) },
   };
 }
