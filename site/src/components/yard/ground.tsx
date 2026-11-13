@@ -52,7 +52,17 @@ const ALBEDO: Record<Surface, string> = {
 const SHEEN: Partial<Record<Surface, number>> = { court: 0.1, asphalt: 0.06, track: 0.05, concrete: 0.05, turf: 0.03, grass: 0.02, soil: 0, water: 0.12 };
 const KINDS = (Object.keys(SURFACES) as Surface[]).sort((a, b) => SURFACES[a].code - SURFACES[b].code);
 
+const SHADE_OPACITY = 0.26;
+const SHADE_LIFT = 0.05;
+const NEAR_PIXEL = 0.25;
+const RIM_FAR = (BEVEL / 2) * 1.3;
+const SHEEN_FROM = 0.6;
+const SHEEN_TO = 1.2;
+
 const VERTEX = `
+#include <common>
+#include <shadowmap_pars_vertex>
+#include <fog_pars_vertex>
 attribute float aRise;
 attribute float aPaved;
 attribute float aLine;
@@ -81,6 +91,10 @@ void main() {
     float wide = max(aHalf, 0.65 * perPixel);
     world.xz += aOut * wide;
     shade = aLine * clamp(aHalf / wide * 1.5, 0.3, 1.0);
+  } else if (aHalf > 0.0) {
+    vec2 anchor = world.xz + aOut;
+    float reach = max(distance(vec3(anchor.x, 0.0, anchor.y), cameraPosition) - aHalf, 0.0);
+    if (reach * uPixel > ${RIM_FAR.toFixed(4)}) world.xz = anchor;
   }
   vec2 campus = vec2(world.x + uMiddle.x, uMiddle.y - world.z);
   vUv = (campus - uGrid.xy) / uGrid.zw;
@@ -91,11 +105,33 @@ void main() {
   vKind = aKind;
   vAlong = vec3(aAlong, dot(world.xz, aAlong) - aPhase);
   vBevel = aBevel;
-  gl_Position = projectionMatrix * viewMatrix * world;
+  vec4 mvPosition = viewMatrix * world;
+  gl_Position = projectionMatrix * mvPosition;
+  #ifdef GROUND_SHADOW
+    vec3 lifted = mix(world.xyz, cameraPosition, ${SHADE_LIFT.toFixed(2)} / max(cameraPosition.y - world.y, 0.001));
+    #if defined( USE_SHADOWMAP ) && NUM_DIR_LIGHT_SHADOWS > 0
+      #pragma unroll_loop_start
+      for ( int i = 0; i < NUM_DIR_LIGHT_SHADOWS; i ++ ) {
+        vDirectionalShadowCoord[ i ] = directionalShadowMatrix[ i ] * vec4( lifted + vec3( 0.0, directionalLightShadows[ i ].shadowNormalBias, 0.0 ), 1.0 );
+      }
+      #pragma unroll_loop_end
+    #endif
+    #ifdef USE_FOG
+      vFogDepth = - ( viewMatrix * vec4( lifted, 1.0 ) ).z;
+    #endif
+  #endif
 }
 `;
 
 const FRAGMENT = `
+#include <common>
+#ifdef GROUND_SHADOW
+#include <fog_pars_fragment>
+#include <bsdfs>
+#include <lights_pars_begin>
+#include <shadowmap_pars_fragment>
+#include <shadowmask_pars_fragment>
+#endif
 uniform sampler2D uHeat;
 uniform sampler2D uHome;
 uniform sampler2D uRamp;
@@ -105,6 +141,7 @@ uniform vec3 uPaper;
 uniform vec3 uRoad;
 uniform vec3 uSun;
 uniform vec3 uEye;
+uniform vec3 uShade;
 uniform vec3 uAlbedo[${KINDS.length}];
 uniform float uSheen[${KINDS.length}];
 varying vec2 vUv;
@@ -137,6 +174,11 @@ float keep(float size, float pixel) {
   return 1.0 - smoothstep(size * 0.15, size * 0.5, pixel);
 }
 
+float detail(vec2 p, float size, float offset, float pixel) {
+  if (pixel >= size * 0.5) return 0.0;
+  return noise(p / size + offset) * keep(size, pixel);
+}
+
 float joint(float coord, float pixel) {
   float d = abs(fract(coord / 1.5 + 0.5) - 0.5) * 1.5;
   float w = max(pixel, 0.001);
@@ -145,37 +187,40 @@ float joint(float coord, float pixel) {
 
 float mown(vec2 p, float pixel) {
   float stripe = smoothstep(-0.3, 0.3, sin(3.14159265 * vAlong.z / 4.572)) * 2.0 - 1.0;
-  return 0.035 * stripe + 0.02 * noise(p / 0.1) * keep(0.1, pixel);
+  return 0.035 * stripe + 0.02 * detail(p, 0.1, 0.0, pixel);
 }
 
 float grain(vec2 p, vec2 fw, float pixel) {
   float kind = floor(vKind + 0.5);
   bool aligned = dot(vAlong.xy, vAlong.xy) > 0.25;
-  vec2 r = vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y);
   if (kind < 0.5) {
     if (aligned) return mown(p, pixel);
-    return 0.015 * noise(p / 0.7) * keep(0.7, pixel) + 0.035 * noise(r / 5.0 + 19.7) * keep(5.0, pixel);
+    vec2 r = vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y);
+    return 0.015 * detail(p, 0.7, 0.0, pixel) + 0.035 * detail(r, 5.0, 19.7, pixel);
   }
   if (kind < 1.5) {
-    return 0.03 * noise(p / 0.18) * keep(0.18, pixel) - 0.03 * smoothstep(-0.2, 0.7, noise(r / 3.5 + 7.3)) * keep(3.5, pixel);
+    float fine = 0.03 * detail(p, 0.18, 0.0, pixel);
+    if (pixel >= 1.75) return fine;
+    vec2 r = vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y);
+    return fine - 0.03 * smoothstep(-0.2, 0.7, noise(r / 3.5 + 7.3)) * keep(3.5, pixel);
   }
   if (kind < 2.5) {
-    float seam = max(joint(p.x, fw.x), joint(p.y, fw.y));
-    return -0.07 * seam * keep(1.5, pixel) + 0.02 * noise(p / 0.8 + 3.1) * keep(0.8, pixel);
+    float seams = 0.0;
+    if (pixel < 0.75) seams = -0.07 * max(joint(p.x, fw.x), joint(p.y, fw.y)) * keep(1.5, pixel);
+    return seams + 0.02 * detail(p, 0.8, 3.1, pixel);
   }
   if (kind < 3.5) return mown(p, pixel);
   if (kind < 4.5) {
     vec2 q = aligned ? vec2(dot(p, vAlong.xy) / 9.0, dot(p, vec2(-vAlong.y, vAlong.x)) / 3.0) : p / 6.0;
     return 0.015 * noise(q + 11.0);
   }
-  if (kind < 5.5) return 0.03 * noise(p / 0.12) * keep(0.12, pixel);
-  if (kind < 6.5) {
-    return 0.025 * noise(p / 0.4 + 5.0) * keep(0.4, pixel) + 0.035 * noise(p / 2.0 + 13.0) * keep(2.0, pixel);
-  }
+  if (kind < 5.5) return 0.03 * detail(p, 0.12, 0.0, pixel);
+  if (kind < 6.5) return 0.025 * detail(p, 0.4, 5.0, pixel) + 0.035 * detail(p, 2.0, 13.0, pixel);
   return 0.0;
 }
 
 float relief(float pixel) {
+  if (pixel >= ${(BEVEL / 2).toFixed(4)}) return 0.0;
   float spread = dot(vBevel.xz, vBevel.xz);
   if (spread < 0.04) return 0.0;
   vec2 outward = vBevel.xz * inversesqrt(spread) * sign(vBevel.y);
@@ -189,34 +234,49 @@ float relief(float pixel) {
 }
 
 void main() {
-  float home = smoothstep(0.35, 0.65, texture2D(uHome, vUv).r);
-  float degrees = uAir + vRise * texture2D(uHeat, vUv).r * 1.275;
-  float place = clamp((degrees - 30.0) * 1.25 / 255.0, 0.0, 1.0);
-  vec3 hot = texture2D(uRamp, vec2(place, 0.5)).rgb;
-  int kind = int(clamp(floor(vKind + 0.5), 0.0, ${(KINDS.length - 1).toFixed(1)}));
-  vec3 albedo = uAlbedo[kind];
-  float wash = clamp(0.18 + 0.72 * smoothstep(104.0, 140.0, degrees), 0.0, 0.9);
-  vec3 base = mix(albedo, hot, wash);
-  base = mix(base, vec3(0.98, 0.985, 0.97), vLine * home * 0.55);
   vec2 fw = fwidth(vWorld);
   float pixel = max(fw.x, fw.y);
-  float near = 1.0 - smoothstep(0.08, 0.25, pixel);
-  if (near > 0.0 && home > 0.0) {
-    float tone = clamp(1.0 + grain(vWorld, fw, pixel) * near, 0.9, 1.06);
-    base *= pow(tone * (1.0 + relief(pixel)), 2.2);
-  }
-  vec3 away = mix(uPaper, uRoad, vPaved);
-  vec3 colour = mix(away, base, home);
+  float home = smoothstep(0.35, 0.65, texture2D(uHome, vUv).r);
   float contact = smoothstep(0.03, 0.55, texture2D(uContact, vUv).r);
-  colour = mix(colour, colour * vec3(0.72, 0.79, 0.83), 0.55 * contact);
-  vec3 sun = normalize(uSun);
-  vec3 viewDir = normalize(uEye - vec3(vWorld.x, 0.0, vWorld.y));
-  vec3 reflected = vec3(-sun.x, sun.y, -sun.z);
-  float glint = pow(max(dot(reflected, viewDir), 0.0), 18.0);
-  float sunUp = smoothstep(0.03, 0.3, sun.y);
-  colour += vec3(1.0, 0.97, 0.9) * glint * uSheen[kind] * sunUp * home;
+  vec3 colour = mix(uPaper, uRoad, vPaved);
+  vec3 glow = vec3(0.0);
+  if (home > 0.0) {
+    float degrees = uAir + vRise * textureLod(uHeat, vUv, 0.0).r * 1.275;
+    float place = clamp((degrees - 30.0) * 1.25 / 255.0, 0.0, 1.0);
+    vec3 hot = textureLod(uRamp, vec2(place, 0.5), 0.0).rgb;
+    int kind = int(clamp(floor(vKind + 0.5), 0.0, ${(KINDS.length - 1).toFixed(1)}));
+    float wash = clamp(0.18 + 0.72 * smoothstep(104.0, 140.0, degrees), 0.0, 0.9);
+    vec3 base = mix(uAlbedo[kind], hot, wash);
+    base = mix(base, vec3(0.98, 0.985, 0.97), vLine * home * 0.55);
+    if (pixel < ${NEAR_PIXEL.toFixed(2)}) {
+      float near = 1.0 - smoothstep(0.08, ${NEAR_PIXEL.toFixed(2)}, pixel);
+      float tone = clamp(1.0 + grain(vWorld, fw, pixel) * near, 0.9, 1.06);
+      base *= pow(tone * (1.0 + relief(pixel)), 2.2);
+    }
+    colour = mix(colour, base, home);
+    float sheen = uSheen[kind] * (1.0 - smoothstep(${SHEEN_FROM.toFixed(2)}, ${SHEEN_TO.toFixed(2)}, pixel));
+    vec3 sun = normalize(uSun);
+    if (sheen > 0.0 && sun.y > 0.03) {
+      vec3 viewDir = normalize(uEye - vec3(vWorld.x, 0.0, vWorld.y));
+      vec3 reflected = vec3(-sun.x, sun.y, -sun.z);
+      float glint = pow(max(dot(reflected, viewDir), 0.0), 18.0);
+      glow = vec3(1.0, 0.97, 0.9) * glint * sheen * smoothstep(0.03, 0.3, sun.y) * home;
+    }
+  }
+  colour = mix(colour, colour * vec3(0.72, 0.79, 0.83), 0.55 * contact) + glow;
   gl_FragColor = vec4(colour, 1.0);
   #include <colorspace_fragment>
+  #ifdef GROUND_SHADOW
+    vec2 inside = step(vec2(0.0), vUv) * step(vUv, vec2(1.0));
+    float shaded = inside.x * inside.y > 0.0 ? ${SHADE_OPACITY.toFixed(2)} * (1.0 - getShadowMask()) : 0.0;
+    if (shaded > 0.0) {
+      vec3 tint = linearToOutputTexel(vec4(uShade, 1.0)).rgb;
+      #ifdef USE_FOG
+        tint = mix(tint, fogColor, smoothstep(fogNear, fogFar, vFogDepth));
+      #endif
+      gl_FragColor.rgb = mix(gl_FragColor.rgb, tint, shaded);
+    }
+  #endif
 }
 `;
 
@@ -321,7 +381,15 @@ function mown(patch: Patch): boolean {
   return patch.surface === 'turf' || patch.surface === 'court' || (patch.surface === 'grass' && SPORTS.test(patch.label ?? ''));
 }
 
-function build(yard: Yard): THREE.BufferGeometry {
+function topFirst(values: Float32Array, used: number): Float32Array {
+  const size = STRIDE * 3;
+  const count = used / size;
+  const out = new Float32Array(used);
+  for (let index = 0; index < count; index += 1) out.set(values.subarray(index * size, index * size + size), (count - 1 - index) * size);
+  return out;
+}
+
+function build(yard: Yard, stacked: boolean): THREE.BufferGeometry {
   const grid = yard.ground.grid;
   const [middleX, middleY] = yard.middle;
   let values = new Float32Array(STRIDE * 65536);
@@ -590,6 +658,18 @@ function build(yard: Yard): THREE.BufferGeometry {
     return x >= grid.minX && x <= right && y >= grid.minY && y <= top ? SURFACES.grass.code : -1;
   };
 
+  const quad = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number, dx: number, dy: number, anx: number, any: number, bnx: number, bny: number, lift: number) => {
+    const mx = (ax + bx + cx + dx) / 4;
+    const my = (ay + by + cy + dy) / 4;
+    const reach = Math.max(Math.hypot(ax - mx, ay - my), Math.hypot(bx - mx, by - my), Math.hypot(cx - mx, cy - my), Math.hypot(dx - mx, dy - my));
+    vertex(ax, ay, mx - ax, my - ay, reach, 0, anx, any, lift);
+    vertex(bx, by, mx - bx, my - by, reach, 0, bnx, bny, lift);
+    vertex(cx, cy, mx - cx, my - cy, reach, 0, bnx, bny, 0);
+    vertex(ax, ay, mx - ax, my - ay, reach, 0, anx, any, lift);
+    vertex(cx, cy, mx - cx, my - cy, reach, 0, bnx, bny, 0);
+    vertex(dx, dy, mx - dx, my - dy, reach, 0, anx, any, 0);
+  };
+
   const rim = (ax: number, ay: number, bx: number, by: number, ix: number, iy: number, jx: number, jy: number, nx: number, ny: number, lift: number) => {
     const length = Math.hypot(bx - ax, by - ay);
     if (length < 1e-3) return;
@@ -603,12 +683,7 @@ function build(yard: Yard): THREE.BufferGeometry {
       const iay = iy + (jy - iy) * from;
       const ibx = ix + (jx - ix) * to;
       const iby = iy + (jy - iy) * to;
-      vertex(oax, oay, 0, 0, 0, 0, nx, ny, lift);
-      vertex(obx, oby, 0, 0, 0, 0, nx, ny, lift);
-      vertex(ibx, iby, 0, 0, 0, 0, nx, ny, 0);
-      vertex(oax, oay, 0, 0, 0, 0, nx, ny, lift);
-      vertex(ibx, iby, 0, 0, 0, 0, nx, ny, 0);
-      vertex(iax, iay, 0, 0, 0, 0, nx, ny, 0);
+      quad(oax, oay, obx, oby, ibx, iby, iax, iay, nx, ny, nx, ny, lift);
     };
     const probe = (step: number) => {
       const share = (step + 0.5) / count;
@@ -646,12 +721,7 @@ function build(yard: Yard): THREE.BufferGeometry {
       const sa = Math.sin(a);
       const cb = Math.cos(b);
       const sb = Math.sin(b);
-      vertex(x + ca * outer, y + sa * outer, 0, 0, 0, 0, ca, sa, lift);
-      vertex(x + cb * outer, y + sb * outer, 0, 0, 0, 0, cb, sb, lift);
-      vertex(x + cb * inner, y + sb * inner, 0, 0, 0, 0, cb, sb, 0);
-      vertex(x + ca * outer, y + sa * outer, 0, 0, 0, 0, ca, sa, lift);
-      vertex(x + cb * inner, y + sb * inner, 0, 0, 0, 0, cb, sb, 0);
-      vertex(x + ca * inner, y + sa * inner, 0, 0, 0, 0, ca, sa, 0);
+      quad(x + ca * outer, y + sa * outer, x + cb * outer, y + sb * outer, x + cb * inner, y + sb * inner, x + ca * inner, y + sa * inner, ca, sa, cb, sb, lift);
     }
   };
 
@@ -735,7 +805,7 @@ function build(yard: Yard): THREE.BufferGeometry {
   }
 
   const geometry = new THREE.BufferGeometry();
-  const packed = new THREE.InterleavedBuffer(values.slice(0, used), STRIDE);
+  const packed = new THREE.InterleavedBuffer(stacked ? topFirst(values, used) : values.slice(0, used), STRIDE);
   const layout: [string, number, number][] = [
     ['position', 3, 0],
     ['aRise', 1, 3],
@@ -858,7 +928,9 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
     return { data, texture: map };
   }, [grid]);
   useEffect(() => () => heat.texture.dispose(), [heat]);
-  const geometry = useMemo(() => build(yard), [yard]);
+  const gl = useThree((state) => state.gl);
+  const stacked = useMemo(() => gl.getContextAttributes()?.stencil === true, [gl]);
+  const geometry = useMemo(() => build(yard, stacked), [yard, stacked]);
   useEffect(() => () => geometry.dispose(), [geometry]);
   const contact = useMemo(() => contactMask(yard), [yard]);
   useEffect(() => () => contact.dispose(), [contact]);
@@ -874,7 +946,16 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
       depthWrite: false,
       depthTest: true,
       side: THREE.DoubleSide,
+      defines: stacked ? { GROUND_SHADOW: '' } : {},
+      lights: stacked,
+      fog: stacked,
+      stencilWrite: stacked,
+      stencilRef: 1,
+      stencilFunc: THREE.NotEqualStencilFunc,
+      stencilZPass: THREE.ReplaceStencilOp,
       uniforms: {
+        ...(stacked ? THREE.UniformsUtils.clone({ ...THREE.UniformsLib.lights, ...THREE.UniformsLib.fog }) : {}),
+        uShade: { value: new THREE.Color(SHADOW) },
         uHeat: { value: heat.texture },
         uHome: { value: homeMask(yard, texture) },
         uRamp: { value: ramp },
@@ -891,7 +972,7 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
         uSheen: { value: KINDS.map((kind) => SHEEN[kind] ?? 0) },
       },
     });
-  }, [yard, grid, heat, contact, texture, width, depth]);
+  }, [yard, grid, heat, contact, texture, width, depth, stacked]);
   useEffect(
     () => () => {
       for (const uniform of Object.values(material.uniforms)) {
@@ -926,6 +1007,7 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
     owner.current = material;
     material.uniforms.uAir.value = yard.fillHeat(heat.data);
     heat.texture.needsUpdate = true;
+    state.gl.initTexture(heat.texture);
   });
 
   const [cx, , cz] = yard.toScene(grid.minX + width / 2, grid.minY + depth / 2);
@@ -995,16 +1077,18 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
 
   return (
     <group>
-      <mesh geometry={geometry} material={material} renderOrder={1} raycast={() => null} />
+      <mesh name="ground" geometry={geometry} material={material} renderOrder={1} receiveShadow={stacked} raycast={() => null} />
       <group position={[cx, 0, cz]}>
         <mesh {...(inert ? { raycast: () => null } : {})} rotation-x={-Math.PI / 2} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerLeave={() => !drag.current && yard.clearProbe()}>
           <planeGeometry args={[width, depth]} />
           <meshBasicMaterial visible={false} />
         </mesh>
-        <mesh rotation-x={-Math.PI / 2} position-y={0.05} receiveShadow raycast={() => null}>
-          <planeGeometry args={[width, depth]} />
-          <shadowMaterial color={SHADOW} opacity={0.26} />
-        </mesh>
+        {!stacked && (
+          <mesh name="shade" rotation-x={-Math.PI / 2} position-y={SHADE_LIFT} receiveShadow raycast={() => null}>
+            <planeGeometry args={[width, depth]} />
+            <shadowMaterial color={SHADOW} opacity={SHADE_OPACITY} />
+          </mesh>
+        )}
       </group>
     </group>
   );
