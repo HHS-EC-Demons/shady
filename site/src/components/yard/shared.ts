@@ -3,7 +3,7 @@ import { HASH, LIMITS, type Plan } from '@/engine/share';
 import { dayWeather, localDay } from '@/engine/weather';
 import { treeHeight, treeRadius, type Saved, type Yard } from './controller';
 import { placeBundle, Unmapped, type Arrival, type Stage } from './loader';
-import { applyFixes, fixesOf, homeBundle, keepSaved, keepSchool, keptSchool, planKey, storedPlan, type Bundle, type Fixes } from './store';
+import { applyShared, fixesOf, homeBundle, keepSaved, keepSchool, keptSchool, planKey, spotOf, storedPlan, type Bundle, type Fixes } from './store';
 
 export function sharedText(): string | null {
   const hash = window.location.hash;
@@ -29,6 +29,7 @@ export function planOf(bundle: Bundle, yard: Yard): Plan | null {
   const { cut, ...fixes } = fixesOf(bundle);
   if (yard.trees.length > LIMITS.trees || yard.sails.length > LIMITS.sails || fixes.surfaces.length + fixes.heights.length > LIMITS.fixes || cut.length > LIMITS.cut) return null;
   const school = bundle.school ? { kind: bundle.school.kind, id: bundle.school.id, name: bundle.school.name, lat: bundle.school.lat, lon: bundle.school.lon } : null;
+  const spots = fixes.surfaces.flatMap((fix) => spotOf(bundle, fix) ?? []);
   return {
     version: 1,
     school,
@@ -36,8 +37,10 @@ export function planOf(bundle: Bundle, yard: Yard): Plan | null {
     years: yard.years,
     trees: yard.trees.map((tree) => [tree.x, tree.y]),
     sails: yard.sails.map((sail) => ({ corners: sail.corners, height: sail.height })),
-    ...fixes,
+    surfaces: [],
+    heights: fixes.heights,
     ...(cut.length > 0 ? { cut } : {}),
+    ...(spots.length > 0 ? { spots } : {}),
   };
 }
 
@@ -68,7 +71,7 @@ export async function sharedBundle(plan: Plan, base: string, say: (text: string)
     const day = hottest.date === plan.date ? null : await dayWeather(campus.center.lat, campus.center.lon, plan.date, today).catch(() => null);
     bundle = day ? { campus, weather: day, school: found, hottest } : { campus, weather: hottest, school: found };
   }
-  return applyFixes(bundle, { surfaces: plan.surfaces, heights: plan.heights, cut: plan.cut ?? [] });
+  return applyShared(bundle, plan);
 }
 
 function near(a: number, b: number): boolean {
