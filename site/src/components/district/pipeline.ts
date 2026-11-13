@@ -1,6 +1,6 @@
 import { applySight } from '../../engine/aerial';
-import type { Campus } from '../../engine/campus';
-import { hasMap, nearest, placeLabel, schoolQuery, schoolSearch, schoolsFromOverpass, schoolsFromPhoton, summarize, type Listed, type Summary } from '../../engine/district';
+import { mapped, type Campus } from '../../engine/campus';
+import { nearest, placeLabel, schoolQuery, schoolSearch, schoolsFromOverpass, schoolsFromPhoton, summarize, type Listed, type Summary } from '../../engine/district';
 import { openCampus } from '../../engine/heat';
 import { loadCampus, overpassResting, type Found, type PhotonFeature } from '../../engine/osm';
 import { linked } from '../../engine/race';
@@ -87,7 +87,7 @@ export function districtWeather(place: Found, signal: AbortSignal): Promise<Weat
 
 export async function modelSchool(school: Found, weather: Weather, known: Campus | null, photo: boolean, signal: AbortSignal): Promise<Modelled | null> {
   let campus = known ?? (await loadCampus(school, {}, { signal, budget: MAP_WAIT, stagger: MAP_GAP }));
-  if (!hasMap(campus)) throw new NoBuildings('No mapped buildings');
+  if (!mapped(campus)) throw new NoBuildings('No mapped buildings');
   let bytes = 0;
   if (photo) {
     if (campus.photo) return null;

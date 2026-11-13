@@ -39,7 +39,7 @@ const FILL_MS = 520;
 const PITCH = (54 * Math.PI) / 180;
 const LAYERS = HOURS + 1;
 const BACKGROUND = '#e9eff1';
-const FLOOR = '#e3eaec';
+const FLOOR = '#e9eff1';
 const CLAY = '#eef2f0';
 const BLANK = '#f2f5f4';
 const GONE = '#d9e1e2';
@@ -153,20 +153,33 @@ void main() {
 }
 `;
 
+const STAND_SHARE = 0.55;
+const COVER_THICK = 0.35;
+
+function prismOf(ring: number[], summary: Summary, scale: number, bottom: number, top: number): THREE.BufferGeometry | null {
+  const points: THREE.Vector2[] = [];
+  for (let index = 0; index + 1 < ring.length; index += 2) {
+    points.push(new THREE.Vector2((ring[index] - summary.width / 2) * scale, (ring[index + 1] - summary.depth / 2) * scale));
+  }
+  if (points.length < 3) return null;
+  const prism = new THREE.ExtrudeGeometry(new THREE.Shape(points), { depth: Math.max(0.015, (top - bottom) * scale), bevelEnabled: false, steps: 1 });
+  prism.rotateX(-Math.PI / 2);
+  prism.translate(0, bottom * scale, 0);
+  prism.deleteAttribute('uv');
+  return prism;
+}
+
 function blocksOf(summary: Summary): THREE.BufferGeometry | null {
   const scale = INNER / Math.max(summary.width, summary.depth, 1);
   const parts: THREE.BufferGeometry[] = [];
   for (const block of summary.blocks) {
-    const points: THREE.Vector2[] = [];
-    for (let index = 0; index + 1 < block.ring.length; index += 2) {
-      points.push(new THREE.Vector2((block.ring[index] - summary.width / 2) * scale, (block.ring[index + 1] - summary.depth / 2) * scale));
-    }
-    if (points.length < 3) continue;
-    const shape = new THREE.Shape(points);
-    const prism = new THREE.ExtrudeGeometry(shape, { depth: Math.max(0.02, block.height * scale), bevelEnabled: false, steps: 1 });
-    prism.rotateX(-Math.PI / 2);
-    prism.deleteAttribute('uv');
-    parts.push(prism);
+    const top = block.stand ? block.height * STAND_SHARE : block.height;
+    const prism = prismOf(block.ring, summary, scale, Math.min(block.min ?? 0, top), top);
+    if (prism) parts.push(prism);
+  }
+  for (const cover of summary.covers ?? []) {
+    const prism = prismOf(cover.ring, summary, scale, Math.max(0, cover.height - COVER_THICK), cover.height);
+    if (prism) parts.push(prism);
   }
   if (parts.length === 0) return null;
   const merged = mergeGeometries(parts);
@@ -178,7 +191,7 @@ function Tiles({ tiles, slots, minute, active, onHover, onOpen, label, cols }: P
   const invalidate = useThree((state) => state.invalidate);
   const slabs = useRef<THREE.InstancedMesh>(null);
   const tops = useRef<THREE.InstancedMesh>(null);
-  const rows = Math.max(1, Math.ceil(slots / cols));
+  const rows = Math.max(1, Math.ceil(tiles.length / cols));
   const motion = useRef<Motion[]>([]);
   const matrix = useMemo(() => new THREE.Matrix4(), []);
   const anchor = useMemo(() => new THREE.Vector3(), []);
@@ -293,7 +306,7 @@ function Tiles({ tiles, slots, minute, active, onHover, onOpen, label, cols }: P
         frames.addLayerUpdate(tile.slot * LAYERS + hour);
       }
       const known = batch.ids.get(tile.slot);
-      if (!known || known.summary.blocks !== summary.blocks) {
+      if (!known || known.summary.blocks !== summary.blocks || known.summary.covers !== summary.covers) {
         const geometry = blocksOf(summary);
         if (known) {
           batch.mesh.deleteInstance(known.instance);
@@ -371,9 +384,16 @@ function Tiles({ tiles, slots, minute, active, onHover, onOpen, label, cols }: P
     const gone = top.getAttribute('aGone') as THREE.InstancedBufferAttribute;
     const list = motion.current;
     let activeSlot = -1;
-    for (let slot = 0; slot < list.length && slot < Math.max(1, slots); slot += 1) {
+    for (let slot = 0; slot < Math.max(1, slots); slot += 1) {
       const state = list[slot];
-      if (!state || !state.placed) continue;
+      if (!state || !state.placed || !keys.has(slot)) {
+        matrix.makeScale(0, 0, 0);
+        slabs.current?.setMatrixAt(slot, matrix);
+        tops.current?.setMatrixAt(slot, matrix);
+        const hidden = batch.ids.get(slot);
+        if (hidden) batch.mesh.setMatrixAt(hidden.instance, matrix);
+        continue;
+      }
       if (state.x !== state.toX || state.z !== state.toZ) {
         const share = Math.min(1, (now - state.start) / MOVE_MS);
         const eased = ease(share);
@@ -568,7 +588,7 @@ function Ready({ onReady }: { onReady: () => void }) {
 
 function Board(props: Props) {
   const size = useThree((state) => state.size);
-  const count = Math.max(1, props.slots);
+  const count = Math.max(1, props.tiles.length);
   const roomH = Math.max(40, size.height - props.insets.top - props.insets.bottom);
   const cols = columnsFor(count, size.width, roomH);
   const rows = Math.ceil(count / cols);

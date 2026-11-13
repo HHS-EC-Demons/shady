@@ -19,7 +19,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 const BAR = `rgb(${RAMP[6][1].join(' ')})`;
 const START = FIRST_HOUR * 60;
 const END = LAST_HOUR * 60;
-const INSETS = { top: 132, bottom: 76 };
+const INSETS = { top: 84, bottom: 76 };
 const SAMPLES: Found[] = [
   { kind: 'relation', id: 6579857, name: 'Frisco', place: 'Texas, United States', lat: 33.1505998, lon: -96.8238183, extent: { south: 33.0810976, west: -96.9227866, north: 33.219578, east: -96.7327675 } },
   { kind: 'relation', id: 110833, name: 'Tempe', place: 'Arizona, United States', lat: 33.4255117, lon: -111.940016, extent: { south: 33.31986, west: -111.9784718, north: 33.4639799, east: -111.8773587 } },
@@ -149,7 +149,7 @@ function statusOf(run: Run | null): string {
   if (run.phase === 'listing') return `Loading the map of ${run.place.name}`;
   if (run.phase === 'weather') return 'Loading its hottest day of the year';
   if (run.phase === 'empty') return 'No schools found';
-  if (run.phase === 'failed') return 'The map did not load';
+  if (run.phase === 'failed') return run.failure === 'weather' ? 'The weather did not load' : 'The map did not load';
   return run.count();
 }
 
@@ -261,7 +261,7 @@ export default function District({ base }: { base: string }) {
 
   if (flat || !place) {
     return (
-      <section className="shell mx-auto w-full max-w-[880px] pb-20 pt-[7.5rem]" data-phase={run?.phase ?? 'idle'}>
+      <section className="shell mx-auto w-full max-w-[880px] pb-20 pt-12" data-phase={run?.phase ?? 'idle'}>
         <h1 className="max-w-[12ch] text-[length:clamp(2.5rem,5.4vw,4.25rem)]">{place ? placeLabel(place) : 'Shade your district.'}</h1>
         <Search key={place ? schoolKey(place) : 'none'} value={place?.name ?? ''} onPick={pick} autoFocus={refocus} className="mt-8 max-w-[26rem]" />
         {!place && (
@@ -297,7 +297,7 @@ export default function District({ base }: { base: string }) {
 
   return (
     <>
-      <section className="relative h-[72dvh] min-h-[480px] overflow-hidden sm:h-dvh sm:min-h-[560px]" data-phase={run?.phase ?? 'idle'}>
+      <section className="relative h-[72dvh] min-h-[480px] overflow-hidden sm:h-[calc(100dvh-72px)] sm:min-h-[560px]" data-phase={run?.phase ?? 'idle'}>
         <h1 className="sr-only">{placeLabel(place)}</h1>
         <div className="absolute inset-0 grid grid-rows-[minmax(0,1fr)_auto]">
           <div className="relative min-h-0">
@@ -325,7 +325,7 @@ export default function District({ base }: { base: string }) {
             )}
             {!drawn && !stopped && <Skeleton className="absolute inset-0 rounded-none bg-muted" />}
             <Tooltip refer={tooltip} row={activeRow} minute={minute} />
-            <Search key={schoolKey(place)} value={place.name} onPick={pick} autoFocus={refocus} className="absolute left-[var(--gutter)] right-[var(--gutter)] top-[4.75rem] z-20 w-auto sm:right-auto sm:w-[22rem]" />
+            <Search key={schoolKey(place)} value={place.name} onPick={pick} autoFocus={refocus} className="absolute left-[var(--gutter)] right-[var(--gutter)] top-4 z-20 w-auto sm:right-auto sm:w-[22rem]" />
             {listed && <Legend />}
           </div>
           <div className="relative border-t border-rule bg-raised">

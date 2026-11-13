@@ -4,7 +4,7 @@ import type { Found } from '@/engine/osm';
 import type { Weather } from '@/engine/weather';
 
 export type Kept = { key: string; place: Found; at: number; total: number; schools: Found[]; weather: Weather | null };
-export type KeptRow = { key: string; district: string; school: string; at: number; status: 'done' | 'failed' | 'unmapped'; summary?: Summary; looked?: boolean };
+export type KeptRow = { key: string; district: string; school: string; at: number; status: 'done' | 'failed' | 'unmapped' | 'bare'; summary?: Summary; looked?: boolean; version?: number };
 type KeptCampus = { key: string; at: number; campus: Campus };
 
 const NAME = 'shady-district';

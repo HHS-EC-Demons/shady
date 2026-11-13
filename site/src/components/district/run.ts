@@ -1,13 +1,13 @@
 import { covered } from '@/engine/aerial';
-import type { Campus } from '@/engine/campus';
-import { MOST_SCHOOLS, countLine, ordered, photoPicks, schoolKey, slowLink, type Link, type Row } from '@/engine/district';
-import { fresh } from '@/engine/memory';
+import { CAMPUS_VERSION, outdated, type Campus } from '@/engine/campus';
+import { MOST_SCHOOLS, bareGround, countLine, photoPicks, schoolKey, shownRows, skipPhotos, upToDate, type Link, type Row } from '@/engine/district';
 import type { Found } from '@/engine/osm';
 import type { Weather } from '@/engine/weather';
-import { begin, mapped } from '../yard/loader';
+import { begin, usable } from '../yard/loader';
 import { recall, remember } from '../yard/recall';
+import { hasFixes } from '../yard/store';
 import type { Engine } from './remote';
-import { keepCampus, keepDistrict, keepRow, keptCampus, openKept, rowKey } from './store';
+import { keepCampus, keepDistrict, keepRow, keptCampus, openKept, rowKey, type KeptRow } from './store';
 
 export type Phase = 'opening' | 'listing' | 'weather' | 'modelling' | 'photos' | 'done' | 'empty' | 'failed';
 
@@ -18,6 +18,7 @@ export class Run {
   readonly place: Found;
   readonly key: string;
   phase: Phase = 'opening';
+  failure: 'map' | 'weather' | null = null;
   total = 0;
   weather: Weather | null = null;
   rows: Row[] = [];
@@ -44,17 +45,13 @@ export class Run {
   snapshot = (): number => this.version;
 
   private emit(): void {
-    this.shown = ordered(this.rows);
+    this.shown = shownRows(this.rows);
     this.version += 1;
     for (const listener of this.listeners) listener();
   }
 
   count(): string {
-    return countLine(this.rows.length, this.total);
-  }
-
-  campusOf(key: string): Campus | null {
-    return this.campuses.get(key) ?? null;
+    return countLine(this.shown.length, Math.max(this.total, this.rows.length));
   }
 
   close(): void {
@@ -66,8 +63,19 @@ export class Run {
     return !this.stop.signal.aborted;
   }
 
+  private fail(failure: 'map' | 'weather'): void {
+    this.failure = failure;
+    this.phase = 'failed';
+    this.emit();
+  }
+
   private save(): void {
     void keepDistrict({ key: this.key, place: this.place, at: this.born ?? Date.now(), total: this.total, schools: this.rows.map((row) => row.school), weather: this.weather });
+  }
+
+  private keep(row: Row, status: KeptRow['status'], version: number): void {
+    const school = schoolKey(row.school);
+    void keepRow({ key: rowKey(this.key, school), district: this.key, school, at: Date.now(), status, summary: row.summary, looked: row.looked, version });
   }
 
   async start(): Promise<void> {
@@ -82,7 +90,8 @@ export class Run {
         const byKey = new Map(rows.map((row) => [row.school, row]));
         this.rows = kept.schools.map((school) => {
           const found = byKey.get(schoolKey(school));
-          return found ? { school, status: found.status, summary: found.summary, looked: found.looked } : { school, status: 'waiting' };
+          if (!found || (found.version ?? 0) < CAMPUS_VERSION || (found.status === 'done' && !upToDate(found.summary))) return { school, status: 'waiting' };
+          return { school, status: found.status, summary: found.summary, looked: found.looked };
         });
         this.emit();
       }
@@ -94,8 +103,7 @@ export class Run {
       const listed = await this.engine.ask({ kind: 'list', place: this.place }, signal);
       if (!this.alive()) return;
       if (listed.kind !== 'listed') {
-        this.phase = 'failed';
-        this.emit();
+        this.fail('map');
         return;
       }
       this.total = listed.listing.total;
@@ -115,13 +123,13 @@ export class Run {
       const answer = await weatherAsk;
       if (!this.alive()) return;
       if (answer.kind !== 'weather') {
-        this.phase = 'failed';
-        this.emit();
+        this.fail('weather');
         return;
       }
       this.weather = answer.weather;
       this.save();
     }
+    this.failure = null;
     this.phase = 'modelling';
     this.emit();
     const known = await this.fromYard();
@@ -129,7 +137,7 @@ export class Run {
     const queue = this.rows.filter((row) => {
       const yard = known.get(schoolKey(row.school));
       if (row.status === 'done') return Boolean(yard?.photo && !row.summary?.photo);
-      return row.status !== 'unmapped';
+      return row.status !== 'unmapped' && row.status !== 'bare';
     });
     for (const row of queue) if (row.status !== 'done') row.status = 'waiting';
     this.emit();
@@ -144,8 +152,11 @@ export class Run {
     await Promise.all(Array.from({ length: IN_FLIGHT }, lane));
     if (!this.alive()) return;
     if (!this.rows.some((row) => row.status === 'done')) {
-      this.phase = this.rows.every((row) => row.status === 'unmapped') ? 'done' : 'failed';
-      this.emit();
+      if (this.rows.some((row) => row.status === 'failed')) this.fail('map');
+      else {
+        this.phase = 'done';
+        this.emit();
+      }
       return;
     }
     if (this.photosAllowed()) {
@@ -159,8 +170,8 @@ export class Run {
         row.looked = true;
         const before = row.summary;
         const campus = this.campuses.get(key) ?? (await keptCampus(key));
-        if (campus) await this.model(row, campus, true);
-        if (row.summary === before) void keepRow({ key: rowKey(this.key, key), district: this.key, school: key, at: Date.now(), status: 'done', summary: before, looked: true });
+        if (campus && !outdated(campus)) await this.model(row, campus, true);
+        if (row.summary === before) this.keep(row, 'done', before.version);
       }
       if (!this.alive()) return;
     }
@@ -170,7 +181,7 @@ export class Run {
 
   private photosAllowed(): boolean {
     const link = (navigator as Navigator & { connection?: Link }).connection;
-    return covered(this.place) && !slowLink(link);
+    return covered(this.place) && !skipPhotos(link, window.matchMedia('(pointer: coarse)').matches);
   }
 
   private async fromYard(): Promise<Map<string, Campus>> {
@@ -179,7 +190,7 @@ export class Run {
     await Promise.all(
       this.rows.map(async (row) => {
         const memory = await recall(row.school);
-        if (memory && fresh(memory, now) && mapped(memory.campus)) known.set(schoolKey(row.school), memory.campus);
+        if (memory && usable(memory, now)) known.set(schoolKey(row.school), memory.campus);
       }),
     );
     return known;
@@ -195,19 +206,19 @@ export class Run {
     }
     const answer = await this.engine.ask({ kind: 'model', school: row.school, weather, campus, photo }, this.stop.signal);
     if (!this.alive()) return;
-    const at = Date.now();
     if (answer.kind === 'modelled' && answer.result) {
-      row.status = 'done';
-      row.summary = answer.result.summary;
+      const { summary } = answer.result;
+      row.summary = summary;
+      row.status = bareGround(summary) ? 'bare' : 'done';
       this.campuses.set(key, answer.result.campus);
       void keepCampus(key, answer.result.campus);
-      void keepRow({ key: rowKey(this.key, key), district: this.key, school: key, at, status: 'done', summary: answer.result.summary, looked: row.looked });
+      this.keep(row, row.status, summary.version);
     } else if (answer.kind === 'unmapped') {
       if (!photo) row.status = 'unmapped';
-      void keepRow({ key: rowKey(this.key, key), district: this.key, school: key, at, status: 'unmapped' });
+      this.keep(row, 'unmapped', CAMPUS_VERSION);
     } else if (!photo && row.status !== 'done') {
       row.status = row.summary ? 'done' : 'failed';
-      if (!row.summary) void keepRow({ key: rowKey(this.key, key), district: this.key, school: key, at, status: 'failed' });
+      if (!row.summary) this.keep(row, 'failed', CAMPUS_VERSION);
     }
     this.emit();
   }
@@ -215,10 +226,10 @@ export class Run {
   async handOver(school: Found): Promise<void> {
     const key = schoolKey(school);
     const memory = await recall(school);
-    if (!(memory && fresh(memory, Date.now()) && mapped(memory.campus)) && this.weather) {
+    if (!(memory && usable(memory, Date.now())) && !(memory && hasFixes(memory.fixes))) {
       const campus = this.campuses.get(key) ?? (await keptCampus(key));
-      if (campus) await remember({ found: school, campus, weather: this.weather, enriched: Boolean(campus.photo), fixes: NO_FIXES });
+      if (campus && !outdated(campus)) await remember({ found: school, campus, weather: memory?.weather ?? null, enriched: Boolean(campus.photo), fixes: NO_FIXES });
     }
-    begin(school);
+    begin(school, this.weather ?? undefined);
   }
 }
