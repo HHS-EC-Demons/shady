@@ -90,6 +90,7 @@ export default function Film({ base, story }: { base: string; story: Story }) {
     host.dataset.mode = 'loading';
     const onScroll = () => {
       film.target = measure(host);
+      if (host.dataset.mode === 'loading') film.current = film.target;
       film.wake();
     };
     onScroll();
