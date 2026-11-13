@@ -95,6 +95,39 @@ On the live site at https://hhs-ec-demons.github.io/shady/ the film was live 1.7
 
 The story numbers are cached on the server, the built model and simulations are kept in memory between page changes, the page transition is 260 ms, and icons are imported one by one.
 
+## Load on a slow phone
+
+Lighthouse 13.6 in its default mobile mode with only the performance category. It simulates a slow 4G network and a processor 4 times slower than the machine it runs on.
+
+Before was measured on the live site at https://hhs-ec-demons.github.io/shady/ on 2026-11-12.
+
+| Page | Score | LCP | Total blocking time | Longest tasks | Time to interactive |
+| --- | --- | --- | --- | --- | --- |
+| Home | 62 | 1.0 s | 14,010 ms | 6.1 s, 3.2 s, 2.0 s, 1.0 s, 0.9 s | 16.0 s |
+| Yard | 57 | 3.7 s | 5,300 ms | 3.9 s, 0.9 s, 0.5 s | 7.9 s |
+| Plan | 75 | 1.9 s | 1,250 ms | not recorded | not recorded |
+| Sources | 100 | not recorded | 10 ms | not recorded | not recorded |
+
+The same old build served by `astro preview` on this laptop gave these medians of 3 runs on 2026-11-12, each run started with the one minute load under 4.
+
+| Page | Score | LCP | Total blocking time | Longest task | Time to interactive |
+| --- | --- | --- | --- | --- | --- |
+| Home | 70 | 1.0 s | 2,490 ms | 920 ms | 7.9 s |
+| Yard | 56 | 4.4 s | 2,203 ms | 956 ms | 5.8 s |
+| Plan | 76 | 2.6 s | 936 ms | 884 ms | 3.2 s |
+
+After is the new production build on the same local preview with the same Lighthouse settings, median of 3 runs, each started with the one minute load under 4.
+
+| Page | Score | LCP | Total blocking time | Longest task | Time to interactive |
+| --- | --- | --- | --- | --- | --- |
+| Home | 90 | 1.0 s | 408 ms | 160 ms | 5.0 s |
+| Yard | 88 | 2.9 s | 314 ms | 162 ms | 4.8 s |
+| Plan | 96 | 2.4 s | 141 ms | 190 ms | 2.6 s |
+
+Sources was not measured again. On this laptop without throttling the film went live 1.1 s after the page was requested on the local preview, down from 1.6 s for the old build, and going back to the landing page took 0.38 s, down from 0.66 s.
+
+The heat model now runs in a module Web Worker that calls the same engine functions, so its results are byte for byte the same as before. The worker builds the ground grid, the shadow backdrop and the bare day, and also the contact shadows, the rooftop units and the ground mesh data that the main thread used to build while it mounted the scene. The film goes live on the bare day while a second worker computes the sail day and the tree day, and the film switches to them when they arrive. The yard sends each plan change to the worker and drops any answer older than the latest edit. The 3D scene mounts one part per task and compiles its shaders in the background before its first frame. The yard page loads its 3D code after the readout bar has painted. The landing page now picks the film or the stills before the beat images load, so a visitor who gets the film no longer downloads stills it never shows. The two Latin web fonts and the campus file are preloaded. The yard still misses an LCP of 2.5 s because its readout bar waits for 285 KB of fonts, scripts and data in 20 requests on the simulated network.
+
 ## What keeps it fast
 
 - The canvas renders on demand. A frame is drawn only when scroll, the pointer, an animation or the model changes something. An idle page draws nothing.
