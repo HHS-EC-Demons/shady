@@ -2,7 +2,7 @@ import { defineConfig } from 'astro/config';
 import react from '@astrojs/react';
 import tailwindcss from '@tailwindcss/vite';
 
-const icons = ['ArrowCounterClockwise', 'ArrowsOut', 'Check', 'MagnifyingGlass', 'Plant', 'Printer', 'Thermometer', 'Trash', 'Tree', 'Umbrella', 'X'];
+const icons = ['ArrowCounterClockwise', 'ArrowsOut', 'Check', 'LinkSimple', 'MagnifyingGlass', 'Plant', 'Printer', 'Thermometer', 'Trash', 'Tree', 'Umbrella', 'X'];
 
 export default defineConfig({
   site: process.env.SITE_URL || 'http://localhost:4321',
@@ -13,7 +13,7 @@ export default defineConfig({
   vite: {
     plugins: [tailwindcss()],
     optimizeDeps: {
-      include: icons.map((name) => `@phosphor-icons/react/dist/csr/${name}`),
+      include: [...icons.map((name) => `@phosphor-icons/react/dist/csr/${name}`), 'qrcode.react'],
     },
   },
 });

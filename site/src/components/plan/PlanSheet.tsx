@@ -1,5 +1,6 @@
+import { LinkSimpleIcon } from '@phosphor-icons/react/dist/csr/LinkSimple';
 import { PrinterIcon } from '@phosphor-icons/react/dist/csr/Printer';
-import { useEffect, useMemo, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
@@ -9,9 +10,16 @@ import { TOUCH_LIMIT, rampColor } from '@/engine/heat';
 import { unproject } from '@/engine/osm';
 import { warmUp } from '@/engine/remote';
 import { placeDay, placesOf, shadeDistance, walkToShade, type PlaceDay } from '@/engine/places';
+import { decodePlan, encodePlan, linkFor } from '@/engine/share';
 import { clockLabel } from '@/engine/sun';
-import { SQUARE_FEET, Yard } from '../yard/controller';
-import { loadBundle, restorePlan } from '../yard/store';
+import { SQUARE_FEET, Yard, type Saved } from '../yard/controller';
+import { adopt, clashes, dropHash, planOf, sharedBundle, sharedText, watchHash } from '../yard/shared';
+import { loadBundle, restorePlan, type Bundle } from '../yard/store';
+
+const OpenShared = lazy(() => import('../yard/ShareDialogs').then((module) => ({ default: module.OpenShared })));
+const LinkBox = lazy(() => import('../yard/ShareDialogs').then((module) => ({ default: module.LinkBox })));
+const SchoolPicker = lazy(() => import('../yard/SchoolPicker').then((module) => ({ default: module.SchoolPicker })));
+const QRCodeSVG = lazy(() => import('qrcode.react').then((module) => ({ default: module.QRCodeSVG })));
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 
@@ -148,7 +156,61 @@ function Map({ yard }: { yard: Yard }) {
   );
 }
 
-function Sheet({ yard, base }: { yard: Yard; base: string }) {
+function useLink(bundle: Bundle, yard: Yard, base: string): { link: string; shareable: boolean } {
+  const plan = useMemo(() => planOf(bundle, yard), [bundle, yard]);
+  const [link, setLink] = useState('');
+  useEffect(() => {
+    setLink('');
+    if (!plan) return;
+    let live = true;
+    void encodePlan(plan).then((text) => {
+      if (live) setLink(linkFor(window.location.origin, base, text));
+    });
+    return () => {
+      live = false;
+    };
+  }, [plan, base]);
+  return { link, shareable: plan !== null };
+}
+
+function CopyLink({ link }: { link: string }) {
+  const [copied, setCopied] = useState(false);
+  const [boxed, setBoxed] = useState(false);
+  const [made, setMade] = useState(false);
+  const button = useRef<HTMLButtonElement>(null);
+  const timer = useRef(0);
+  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(link);
+      setCopied(true);
+      window.clearTimeout(timer.current);
+      timer.current = window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      setMade(true);
+      setBoxed(true);
+    }
+  };
+  return (
+    <>
+      <Button ref={button} variant="outline" size="lg" className="h-11 rounded-full px-5 text-base" disabled={link === ''} onClick={() => void copy()}>
+        <LinkSimpleIcon aria-hidden="true" weight="bold" />
+        {copied ? 'Copied' : 'Copy link'}
+      </Button>
+      <span className="sr-only" aria-live="polite">
+        {copied ? 'Copied' : ''}
+      </span>
+      {made && (
+        <Suspense fallback={null}>
+          <LinkBox open={boxed} onOpenChange={setBoxed} link={link} returnTo={button} />
+        </Suspense>
+      )}
+    </>
+  );
+}
+
+function Sheet({ yard, bundle, base }: { yard: Yard; bundle: Bundle; base: string }) {
+  const { link, shareable: canShare } = useLink(bundle, yard, base);
   const places = useMemo(() => {
     const list = placesOf(yard.campus, yard.ground);
     const bare = shadeDistance(yard.ground, yard.bare, yard.peak);
@@ -174,6 +236,7 @@ function Sheet({ yard, base }: { yard: Yard; base: string }) {
     [yard],
   );
   const planned = trees.length + sails.length > 0;
+  const shareable = planned && canShare;
   const before = yard.tallyOf('bare', yard.peak);
   const after = yard.tallyOf('day', yard.peak);
   const cooled = Math.round((yard.cooled(yard.peak) * SQUARE_FEET) / 100) * 100;
@@ -212,12 +275,26 @@ function Sheet({ yard, base }: { yard: Yard; base: string }) {
   return (
     <div className="shell mx-auto flex max-w-[1180px] flex-col gap-10 pb-20 pt-6 [&>*]:min-w-0">
       <div className="flex flex-wrap items-end justify-between gap-4">
-        <h1 className="text-[clamp(2.25rem,4.4vw,3.75rem)]">Shade plan</h1>
+        <h1 className="mr-auto text-[clamp(2.25rem,4.4vw,3.75rem)]">Shade plan</h1>
         {planned ? (
-          <Button size="lg" className="h-11 rounded-full px-5 text-base print:hidden" onClick={() => window.print()}>
-            <PrinterIcon aria-hidden="true" weight="fill" />
-            Print
-          </Button>
+          <>
+            <div className={shareable ? 'order-last flex w-full flex-wrap items-center gap-3 md:order-none md:w-auto print:hidden' : 'flex print:hidden'}>
+              {shareable && <CopyLink link={link} />}
+              <Button size="lg" className="h-11 rounded-full px-5 text-base print:hidden" onClick={() => window.print()}>
+                <PrinterIcon aria-hidden="true" weight="fill" />
+                Print
+              </Button>
+            </div>
+            {shareable && (
+              <div className="size-24 shrink-0 print:size-[28mm]">
+                {link !== '' && (
+                  <Suspense fallback={null}>
+                    <QRCodeSVG value={link} size={96} level="L" fgColor="#12261c" bgColor="transparent" role="img" aria-label="Link to this plan" className="block size-full" />
+                  </Suspense>
+                )}
+              </div>
+            )}
+          </>
         ) : (
           <a href={`${base}yard/`} className="pill">
             Plant in the yard
@@ -327,34 +404,75 @@ function Sheet({ yard, base }: { yard: Yard; base: string }) {
 }
 
 export default function PlanSheet({ base }: { base: string }) {
-  const [yard, setYard] = useState<Yard | null>(null);
+  const [shown, setShown] = useState<{ yard: Yard; bundle: Bundle } | null>(null);
   const [failed, setFailed] = useState(false);
+  const [status, setStatus] = useState('');
+  const [asking, setAsking] = useState<((take: boolean) => void) | null>(null);
+  const nowhere = useRef<HTMLButtonElement>(null);
 
   useEffect(() => {
     let live = true;
     warmUp();
-    loadBundle(base)
-      .then((file) => Yard.open(file.campus, file.weather))
-      .then(async (next) => {
-        restorePlan(next);
-        await next.settled();
-        next.close();
-        if (live) setYard(next);
-      })
-      .catch(() => live && setFailed(true));
+    const shared = sharedText();
+    const say = (text: string) => {
+      if (live) setStatus(text);
+    };
+    const ask = () => new Promise<boolean>((resolve) => setAsking(() => resolve));
+    const run = async () => {
+      let file = await loadBundle(base);
+      let saved: Saved | null = null;
+      if (shared !== null) {
+        const plan = await decodePlan(shared);
+        const next = plan ? await sharedBundle(plan, base, say) : null;
+        say('');
+        if (plan && next && (!clashes(next, plan) || (await ask()))) {
+          saved = adopt(next, plan);
+          file = next;
+          if (plan.school) say('Heating the ground');
+        }
+        dropHash();
+      }
+      const next = await Yard.open(file.campus, file.weather);
+      if (saved) next.load(saved);
+      else restorePlan(next);
+      await next.settled();
+      next.close();
+      if (live) setShown({ yard: next, bundle: file });
+    };
+    run()
+      .catch(() => live && setFailed(true))
+      .finally(() => say(''));
+    const unwatch = watchHash();
     return () => {
       live = false;
+      unwatch();
     };
   }, [base]);
 
+  const dialogs = (
+    <Suspense fallback={null}>
+      {status !== '' && <SchoolPicker open onOpenChange={() => undefined} onPick={() => undefined} home="Heritage High School" status={status} note="" returnTo={nowhere} />}
+      {asking && (
+        <OpenShared
+          open
+          onChoose={(take) => {
+            asking(take);
+            setAsking(null);
+          }}
+        />
+      )}
+    </Suspense>
+  );
+
   if (failed) return <p className="shell py-16 text-lg">The plan did not load. Reload the page.</p>;
-  if (!yard) {
+  if (!shown) {
     return (
       <div className="shell mx-auto flex max-w-[1180px] flex-col gap-6 pb-20 pt-6">
         <Skeleton className="h-14 w-72 bg-muted" />
         <Skeleton className="h-[60vh] w-full bg-muted" />
+        {dialogs}
       </div>
     );
   }
-  return <Sheet yard={yard} base={base} />;
+  return <Sheet yard={shown.yard} bundle={shown.bundle} base={base} />;
 }
