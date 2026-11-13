@@ -86,7 +86,7 @@ export function SchoolPicker({ open, onOpenChange, onPick, home, status, note, o
               )}
             </div>
           )}
-          <CommandList className="max-h-[340px]">
+          <CommandList className="max-h-[312px] sm:max-h-[340px]">
             {status === '' && note === '' && <CommandEmpty className="py-6 text-center text-base text-soft">{empty}</CommandEmpty>}
             {status === '' && found.length > 0 && (
               <CommandGroup>
