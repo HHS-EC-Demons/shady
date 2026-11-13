@@ -130,7 +130,7 @@ function Schools({ rows, base, stalled, onOpen, onActive }: ListProps) {
 
 function Tooltip({ refer, row, minute }: { refer: RefObject<HTMLDivElement | null>; row: Row | null; minute: number }) {
   return (
-    <div ref={refer} className="pointer-events-none absolute left-0 top-0 z-10" style={{ visibility: 'hidden' }} aria-hidden="true">
+    <div ref={refer} className="pointer-events-none absolute left-0 top-0 z-30" style={{ visibility: 'hidden' }} aria-hidden="true">
       {row && (
         <div className="absolute -translate-x-1/2 -translate-y-full pb-2">
           <div className="rounded-md bg-oak px-2.5 py-1.5 text-center text-raised shadow-[0_6px_18px_rgba(18,38,28,0.28)]">
@@ -229,7 +229,8 @@ export default function District({ base }: { base: string }) {
   const tiles = useMemo<Tile[]>(() => {
     if (!run) return [];
     const slots = new Map(run.rows.map((row, index) => [schoolKey(row.school), index]));
-    return rows.map((row) => ({ key: schoolKey(row.school), slot: slots.get(schoolKey(row.school)) ?? 0, status: row.status, summary: row.summary }));
+    const live = run.phase !== 'failed';
+    return rows.map((row) => ({ key: schoolKey(row.school), slot: slots.get(schoolKey(row.school)) ?? 0, status: row.status, summary: row.summary, busy: live && (row.status === 'waiting' || row.status === 'loading') }));
   }, [run, run?.version]);
 
   const weather = run?.weather ?? null;

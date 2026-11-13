@@ -10,7 +10,7 @@ import { sunAt, utcFor } from '@/engine/sun';
 import type { Weather } from '@/engine/weather';
 import { TIERS, keepFrame, powerChoice, quality, type Tier } from '../yard/quality';
 
-export type Tile = { key: string; slot: number; status: Status; summary?: Summary };
+export type Tile = { key: string; slot: number; status: Status; summary?: Summary; busy: boolean };
 
 type Props = {
   tiles: Tile[];
@@ -34,9 +34,12 @@ const ROUND = 0.5;
 const FLAT = TILE - ROUND * 2;
 const INNER = FLAT - 0.5;
 const LIFT = 0.9;
+const HOP = 2.6;
 const MOVE_MS = 650;
 const FILL_MS = 520;
 const PITCH = (54 * Math.PI) / 180;
+const PULSE_MS = 2000;
+const PULSE = 0.7;
 const LAYERS = HOURS + 1;
 const BACKGROUND = '#e9eff1';
 const FLOOR = '#e9eff1';
@@ -48,7 +51,7 @@ const SHADOW = '#2b4450';
 const SKY = '#f1f7fb';
 const BOUNCE = '#d2cabb';
 
-type Motion = { x: number; z: number; fromX: number; fromZ: number; toX: number; toZ: number; start: number; lift: number; fill: number; placed: boolean; done: boolean; gone: boolean };
+type Motion = { x: number; z: number; fromX: number; fromZ: number; toX: number; toZ: number; start: number; lift: number; fill: number; placed: boolean; done: boolean; gone: boolean; busy: boolean; rising: boolean };
 
 function ease(t: number): number {
   return t < 0.5 ? 4 * t * t * t : 1 - (-2 * t + 2) ** 3 / 2;
@@ -337,18 +340,20 @@ function Tiles({ tiles, slots, minute, active, onHover, onOpen, label, cols }: P
     const now = performance.now();
     const list = motion.current;
     for (let index = 0; index < Math.max(1, slots); index += 1) {
-      if (!list[index]) list[index] = { x: 0, z: 0, fromX: 0, fromZ: 0, toX: 0, toZ: 0, start: 0, lift: 0, fill: 0, placed: false, done: false, gone: false };
+      if (!list[index]) list[index] = { x: 0, z: 0, fromX: 0, fromZ: 0, toX: 0, toZ: 0, start: 0, lift: 0, fill: 0, placed: false, done: false, gone: false, busy: false, rising: false };
     }
     tiles.forEach((tile, place) => {
       const state = list[tile.slot];
       const [x, z] = spot(place, cols, rows);
       state.done = tile.status === 'done' && Boolean(tile.summary);
       state.gone = tile.status === 'failed' || tile.status === 'unmapped';
+      state.busy = tile.busy;
       if (!state.placed) {
         state.x = state.toX = state.fromX = x;
         state.z = state.toZ = state.fromZ = z;
         state.placed = true;
       } else if (state.toX !== x || state.toZ !== z) {
+        state.rising = z < state.z - 0.01 || (Math.abs(z - state.z) <= 0.01 && x < state.x);
         state.fromX = state.x;
         state.fromZ = state.z;
         state.toX = x;
@@ -384,6 +389,7 @@ function Tiles({ tiles, slots, minute, active, onHover, onOpen, label, cols }: P
     const gone = top.getAttribute('aGone') as THREE.InstancedBufferAttribute;
     const list = motion.current;
     let activeSlot = -1;
+    const pulse = PULSE * (0.5 - 0.5 * Math.cos((now / PULSE_MS) * Math.PI * 2));
     for (let slot = 0; slot < Math.max(1, slots); slot += 1) {
       const state = list[slot];
       if (!state || !state.placed || !keys.has(slot)) {
@@ -394,7 +400,8 @@ function Tiles({ tiles, slots, minute, active, onHover, onOpen, label, cols }: P
         if (hidden) batch.mesh.setMatrixAt(hidden.instance, matrix);
         continue;
       }
-      if (state.x !== state.toX || state.z !== state.toZ) {
+      const travelling = state.x !== state.toX || state.z !== state.toZ;
+      if (travelling) {
         const share = Math.min(1, (now - state.start) / MOVE_MS);
         const eased = ease(share);
         state.x = share >= 1 ? state.toX : state.fromX + (state.toX - state.fromX) * eased;
@@ -403,7 +410,7 @@ function Tiles({ tiles, slots, minute, active, onHover, onOpen, label, cols }: P
       }
       const isActive = keys.get(slot) === active && active !== null;
       if (isActive) activeSlot = slot;
-      const liftTo = isActive ? LIFT : 0;
+      const liftTo = (isActive ? LIFT : 0) + (travelling && state.rising ? HOP : 0);
       if (Math.abs(state.lift - liftTo) > 0.002) {
         state.lift += (liftTo - state.lift) * Math.min(1, step * 14);
         moving = true;
@@ -418,7 +425,8 @@ function Tiles({ tiles, slots, minute, active, onHover, onOpen, label, cols }: P
       slabs.current?.setMatrixAt(slot, matrix);
       tops.current?.setMatrixAt(slot, matrix);
       fill.setX(slot, state.fill);
-      gone.setX(slot, state.gone ? 1 : 0);
+      gone.setX(slot, state.gone ? 1 : state.busy ? pulse : 0);
+      if (state.busy) moving = true;
       const built = batch.ids.get(slot);
       if (built) {
         const rise = Math.max(0.001, ease(state.fill));
