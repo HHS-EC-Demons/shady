@@ -4,7 +4,7 @@ import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
-import { SURFACES, extentOf } from '@/engine/campus';
+import { SURFACES, atHome, extentOf } from '@/engine/campus';
 import { dollars, planCost } from '@/engine/cost';
 import { TOUCH_LIMIT, rampColor } from '@/engine/heat';
 import { unproject } from '@/engine/osm';
@@ -72,8 +72,13 @@ function spread(points: { x: number; y: number }[], radius: number): { x: number
   return moved;
 }
 
+function standingTrees(yard: Yard): number {
+  return yard.campus.trees.filter((tree) => atHome(yard.campus, tree.x, tree.y)).length;
+}
+
 function Map({ yard }: { yard: Yard }) {
   const box = extentOf(yard.campus, 12);
+  const standing = standingTrees(yard);
   const means = useMemo(() => yard.surfaceMeans(), [yard]);
   const path = (ring: [number, number][]) => `${ring.map(([x, y], index) => `${index === 0 ? 'M' : 'L'}${x.toFixed(1)} ${(-y).toFixed(1)}`).join(' ')} Z`;
   const line = (ring: [number, number][]) => ring.map(([x, y], index) => `${index === 0 ? 'M' : 'L'}${x.toFixed(1)} ${(-y).toFixed(1)}`).join(' ');
@@ -88,7 +93,7 @@ function Map({ yard }: { yard: Yard }) {
       viewBox={`${box.minX} ${-box.maxY} ${wide} ${tall}`}
       className="h-auto max-h-[78vh] w-full rounded-lg border border-rule bg-raised print:float-left print:mr-6 print:max-h-[190mm] print:w-[46%]"
       role="img"
-      aria-label={`Map of ${yard.campus.name} with ${yard.trees.length} planned trees and ${yard.sails.length} planned sails`}
+      aria-label={`Map of ${yard.campus.name} with ${yard.trees.length} planned trees, ${yard.sails.length} planned sails and ${standing} trees already there`}
     >
       <defs>
         <clipPath id="grounds">
@@ -112,6 +117,9 @@ function Map({ yard }: { yard: Yard }) {
           .map((strip, index) => (
             <path key={index} d={line(strip.line)} fill="none" stroke={fill(means[SURFACES.track.code])} strokeWidth={strip.width} />
           ))}
+        {yard.campus.trees.map((tree, index) => (
+          <circle key={index} cx={tree.x} cy={-tree.y} r={Math.min(tree.radius, mark * 0.4)} fill="#6f8676" fillOpacity={0.75} />
+        ))}
       </g>
       {yard.campus.blocks
         .filter((block) => block.home)
@@ -245,6 +253,7 @@ function Sheet({ yard, bundle, base }: { yard: Yard; bundle: Bundle; base: strin
     { label: 'School', value: yard.campus.name, wide: true },
     { label: 'Day', value: dayLabel(yard.weather.date), wide: false },
     { label: 'Air peak', value: `${Math.round(Math.max(...yard.weather.air))}°F`, wide: false },
+    { label: 'Trees already there', value: String(standingTrees(yard)), wide: false },
   ];
   if (planned) {
     figures.push(

@@ -10,6 +10,7 @@ const percent = (share: number) => `${Math.round(share * 100)}%`;
 
 const rows = [
   { what: 'Buildings, lots, fields, courts and roads', value: 'Map data', source: 'OpenStreetMap contributors', url: 'https://www.openstreetmap.org/copyright' },
+  { what: 'Trees already standing and real field surfaces', value: 'US aerial photo', source: 'USDA NAIP imagery through Microsoft Planetary Computer', url: 'https://planetarycomputer.microsoft.com/dataset/naip' },
   { what: 'Air temperature and sunshine for each hour', value: 'A real recorded day', source: 'Open-Meteo, ERA5 reanalysis', url: 'https://open-meteo.com/en/docs/historical-weather-api' },
   { what: 'Air temperature and sunshine for today', value: 'Forecast for each hour', source: 'Open-Meteo forecast', url: 'https://open-meteo.com/en/docs' },
   { what: 'Where the sun sits in the sky', value: 'Every 10 minutes', source: 'SunCalc', url: 'https://github.com/mourner/suncalc' },
