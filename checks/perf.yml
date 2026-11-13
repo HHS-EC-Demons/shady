@@ -1,0 +1,100 @@
+name: Measure pages
+on:
+  push:
+    branches: ['perf/**']
+permissions:
+  contents: read
+concurrency:
+  group: perf-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  measure:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SITE_URL: https://hhs-ec-demons.github.io
+      BASE_PATH: /shady
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: new
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          path: old
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build both
+        run: |
+          for side in old new; do
+            (cd "$side/site" && npm ci --no-audit --no-fund && npx astro build)
+          done
+      - name: Serve both
+        run: |
+          (cd old/site && nohup npx astro preview --port 4501 --host 127.0.0.1 > ../../old.log 2>&1 &)
+          (cd new/site && nohup npx astro preview --port 4502 --host 127.0.0.1 > ../../new.log 2>&1 &)
+          for port in 4501 4502; do
+            for try in $(seq 1 60); do
+              curl -sf "http://127.0.0.1:$port/shady/" > /dev/null && break
+              sleep 1
+            done
+          done
+          curl -sf http://127.0.0.1:4501/shady/ > /dev/null
+          curl -sf http://127.0.0.1:4502/shady/ > /dev/null
+      - name: Lighthouse, old and new in turn
+        run: |
+          mkdir -p out
+          npm install --no-audit --no-fund --prefix tools lighthouse@13
+          for round in 1 2 3; do
+            for page in home yard plan; do
+              case "$page" in
+                home) path="" ;;
+                yard) path="yard/" ;;
+                plan) path="plan/" ;;
+              esac
+              for side in old new; do
+                port=4501
+                [ "$side" = new ] && port=4502
+                tools/node_modules/.bin/lighthouse "http://127.0.0.1:$port/shady/$path" \
+                  --chrome-flags="--headless=new --no-sandbox --use-angle=swiftshader --enable-unsafe-swiftshader --ignore-gpu-blocklist" \
+                  --quiet --output=json --output-path="out/$page-$side-$round.json" \
+                  --only-categories=performance,accessibility || echo "run failed $page $side $round"
+              done
+            done
+          done
+      - name: Table
+        run: |
+          node -e '
+          const fs = require("fs");
+          const rows = [];
+          for (const file of fs.readdirSync("out").filter((name) => name.endsWith(".json")).sort()) {
+            const report = JSON.parse(fs.readFileSync("out/" + file, "utf8"));
+            const audits = report.audits;
+            const shot = audits["final-screenshot"] && audits["final-screenshot"].details && audits["final-screenshot"].details.data;
+            if (shot) fs.writeFileSync("out/" + file.replace(".json", ".jpg"), Buffer.from(shot.split(",")[1], "base64"));
+            rows.push([
+              file.replace(".json", ""),
+              Math.round(report.categories.performance.score * 100),
+              Math.round(report.categories.accessibility.score * 100),
+              Math.round(audits["largest-contentful-paint"].numericValue),
+              Math.round(audits["total-blocking-time"].numericValue),
+              audits["cumulative-layout-shift"].numericValue.toFixed(3),
+              Math.round(audits["total-byte-weight"].numericValue / 1024),
+              Math.round(audits["interactive"].numericValue),
+              Math.round(audits["mainthread-work-breakdown"].numericValue),
+              Math.round(audits["bootup-time"].numericValue),
+            ].join(" | "));
+          }
+          console.log("run | perf | a11y | LCP ms | TBT ms | CLS | KB | TTI ms | main thread ms | script ms");
+          console.log(rows.join("\n"));
+          '
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lighthouse
+          path: |
+            out/*.jpg
+            old.log
+            new.log
+          retention-days: 3
