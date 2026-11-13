@@ -2,7 +2,9 @@
 
 A 3D heat model of any school. The landing page scrolls through one hot day on a real campus. The yard lets you drag the sun, plant trees, stretch shade sails, check the model against a thermometer and print a planting plan with coordinates and cost.
 
-Built as a Samsung Solve for Tomorrow 2026 to 2027 entry.
+Live at https://hhs-ec-demons.github.io/shady/
+
+Built as a Samsung Solve for Tomorrow 2026 to 2027 entry. Every push to `main` rebuilds and publishes the site through `.github/workflows/deploy.yml`.
 
 ## Run it
 
