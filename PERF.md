@@ -8,8 +8,8 @@ Measured 2026-11-12 on a 2018 MacBook Pro in headless Chrome. The page asks for 
 | --- | --- |
 | 60 fps while scrolling at 1080p on integrated graphics | Intel UHD Graphics 630 at 1080p on the medium tier, 60 fps average and 60 fps at the 1% low in passes 2, 3 and 4, 55 fps average and 30 fps at the 1% low in pass 1 |
 | 60 fps while scrolling on the fast chip | Radeon Pro 555X at 1080p and at 1440 by 900 at 2x on the high tier, 60 fps average and 60 fps at the 1% low in all four passes |
-| Under 100 draw calls | 48 at the busiest beat on high and 41 on medium, up from 44 and 38 |
-| Under 300k triangles | 262k at the busiest beat on high and 155k on medium with 474 standing trees, both counting the shadow pass, up from 181k and 112k with none |
+| Under 100 draw calls | 54 at the busiest beat on high and 46 on medium with covers, sports gear, fences and street furniture, up from 48 and 41 |
+| Under 300k triangles | 269k at the busiest beat on high and 160k on medium with 478 standing trees, both counting the shadow pass, up from 262k and 155k |
 | Initial JavaScript under 350 KB gzipped | 72 KB before the 3D code is asked for, from the earlier load test and not measured again |
 | Largest Contentful Paint under 2.5 s | 116 ms on a local server, from the earlier load test and not measured again |
 | HTML content visible before the 3D is ready | Heading painted at 72 ms and film live at 1.3 s, from the earlier load test and not measured again |
@@ -57,6 +57,40 @@ Scroll test on 2026-11-13 against the production build on `astro preview`, each 
 | Laptop 1080p with the CPU slowed 4 times | Radeon Pro 555X | 582, 60 fps, 60 fps, 0 | 581, 60 fps, 60 fps, 0 | 48 calls, 262k tris, dpr 1.00, high |
 
 The before pass started at a load of 3.3 and ended at 11. The after pass started at 2.9 and ended at 4.7. A separate Intel only pass a minute earlier, started at 2.9, gave 577 frames, 59 fps, 60 fps at the 1% low and 5 slow frames at 1080p, and 476 frames, 58 fps, 30 fps at the 1% low and 13 slow frames at 1440 by 900. The Radeon rows are unchanged. The Intel rows sit at or just under the old numbers and vary from pass to pass by more than the difference. With the blob under every standing tree still drawn on medium, the Intel rows fell to 56 and 57 fps, which is why medium skips it.
+
+## Real life detail
+
+Courts and fields now carry the lines and equipment of their sport, ball fields get a skinned infield and a backstop, roofs without walls are drawn as covers on posts, and fences, walls, hedges, flagpoles, benches, bike racks, street lamps, doors, pools, play pieces, stepped bleachers and roof shapes come from the map. Lines go into the one ground buffer. Covers, pool rims and doors are one mesh that shows on every tier and casts shadows. Every piece of sports gear, fence, wall, hedge and street furniture is merged into one solid mesh and one see through mesh, so a campus adds at most two draw calls for them plus one shadow call on high, and both hide on the low tier like the other props.
+
+Counts were read with `?perf` on the production build for the film and with a counter around every WebGL draw for the yard, which has no readout, both at 1920 by 1080 on the Radeon Pro 555X. They do not depend on the machine load.
+
+| Place | Tier | Before | After |
+| --- | --- | --- | --- |
+| Film, busiest beat | high | 48 calls, 262k tris | 54 calls, 269k tris |
+| Film, busiest beat | medium | 41 calls, 155k tris | 46 calls, 160k tris |
+| Yard, Heritage opening view | high | 41 calls, 212k tris | 47 calls, 219k tris |
+| Yard, Heritage opening view | medium | 34 calls, 105k tris | 39 calls, 110k tris |
+
+The new detail at Heritage costs about 7k triangles, so nothing had to be won back elsewhere. The film still stands under both budgets with room to spare.
+
+Scroll test on 2026-11-13 against the production build, with `checks/scroll-perf.js` pointed at the local servers, one pass per build, Intel rows first. Another build kept the machine busy the whole time. The before pass started at a one minute load of 97 and ended at 155, and the after pass started at 155 and ended at 188. These numbers measure the busy machine more than the site. The Intel runs fell to the low tier in both passes, and the Radeon rows dropped in both. They need a quiet machine before they can stand next to the tables above.
+
+| Run | Chip | Before frames, average, 1% low, slow frames | After frames, average, 1% low, slow frames | After readout |
+| --- | --- | --- | --- | --- |
+| Laptop 1920 by 1080 with `gpu=low` | Intel UHD Graphics 630 | 300, 31 fps, 10 fps, 219 | 292, 30 fps, 12 fps, 244 | 36 calls, 118k tris, dpr 1.00, low |
+| Laptop 1440 by 900 at 2x with `gpu=low` | Intel UHD Graphics 630 | 232, 28 fps, 10 fps, 165 | 290, 36 fps, 8 fps, 137 | 36 calls, 118k tris, dpr 1.00, low |
+| Laptop 1920 by 1080 | Radeon Pro 555X | 581, 60 fps, 60 fps, 0 | 551, 57 fps, 20 fps, 15 | 54 calls, 269k tris, dpr 1.00, high |
+| Laptop 1440 by 900 at 2x | Radeon Pro 555X | 483, 59 fps, 30 fps, 6 | 468, 57 fps, 30 fps, 16 | 54 calls, 269k tris, dpr 1.50, high |
+| Phone 390 by 844 at 3x | Radeon Pro 555X | 364, 47 fps, 9 fps, 38 | 410, 54 fps, 12 fps, 18 | 54 calls, 269k tris, dpr 1.50, high |
+| Laptop 1080p with the CPU slowed 4 times | Radeon Pro 555X | 123, 12 fps, 3 fps, 104 | 95, 10 fps, 1 fps, 82 | 46 calls, 160k tris, dpr 1.00, medium |
+
+Lighthouse 13.6 in its default mobile mode, one run per page, taken while another build kept the one minute load between 80 and 175. The numbers are far below the quiet machine runs above for both builds and only show that the new build is not worse. Accessibility stayed at 100 on every page.
+
+| Page | Before score, LCP, total blocking time, load | After score, LCP, total blocking time, load |
+| --- | --- | --- |
+| Home | 66, 1.2 s, 4,255 ms, 110 | 69, 2.1 s, 3,524 ms, 131 |
+| Yard | 43, 6.0 s, 1,848 ms, 82 | 61, 3.3 s, 1,789 ms, 172 |
+| Plan | 63, 4.5 s, 977 ms, 94 | 84, 2.8 s, 469 ms, 144 |
 
 ## Reading the aerial photo
 
