@@ -17,6 +17,7 @@ const story = tellStory(file.campus, file.weather);
 const more = [
   { big: `${story.air}°F`, small: `${story.school}`, href: 'yard' },
   { big: `${story.trees.length} trees`, small: 'A plan to print', href: 'plan' },
+  { big: '48 schools', small: 'A district ranked', href: 'district' },
   { big: '16 sources', small: 'Every number traced', href: 'sources' },
 ];
 
@@ -186,12 +187,12 @@ const tall = (id: string) => `${base}beats/${id}-tall.jpg`;
   </div>
 
   <section class="shell mx-auto flex max-w-[1180px] flex-col gap-14 pb-10 pt-20">
-    <ul class="m-0 grid list-none gap-x-10 p-0 md:grid-cols-3">
+    <ul class="m-0 grid list-none gap-x-10 p-0 sm:grid-cols-2 lg:grid-cols-4">
       {
         more.map((item) => (
           <li class="border-t border-rule">
             <a href={`${base}${item.href}/`} class="group flex min-h-24 flex-col justify-center gap-1 py-5 no-underline">
-              <span class="data text-[clamp(1.75rem,3vw,2.5rem)] font-semibold leading-none">{item.big}</span>
+              <span class="data whitespace-nowrap text-[clamp(1.75rem,2.6vw,2.125rem)] font-semibold leading-none">{item.big}</span>
               <span class="text-lg font-medium text-soft underline-offset-4 group-hover:text-oak group-hover:underline">{item.small}</span>
             </a>
           </li>
