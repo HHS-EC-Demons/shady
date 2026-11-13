@@ -1,7 +1,10 @@
+import { areaOf, boundsOf, covers, padded, plannedBounds, squareArea, touches, type Area, type Bounds, type LatLon } from './area';
 import type { Block, Campus, Patch, Strip, Surface, Tree } from './campus';
 import { boxOf, insideRing, ringArea, type Point, type Ring } from './geometry';
+import { Stopped, firstOf, linked, type Source } from './race';
 
-type LatLon = { lat: number; lon: number };
+export type { Bounds } from './area';
+
 type Tags = Record<string, string>;
 
 export type Element = {
@@ -14,8 +17,6 @@ export type Element = {
   members?: { type: string; role: string; geometry?: LatLon[] }[];
 };
 
-export type Bounds = { south: number; west: number; north: number; east: number };
-
 export type Found = {
   kind: 'way' | 'relation' | 'node';
   id: number;
@@ -23,33 +24,8 @@ export type Found = {
   place: string;
   lat: number;
   lon: number;
+  extent?: Bounds;
 };
-
-const MIRRORS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter',
-  'https://overpass.private.coffee/api/interpreter',
-  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-];
-
-export async function overpass(query: string, headers: Record<string, string> = {}): Promise<Element[]> {
-  let last = 'no answer';
-  for (const mirror of MIRRORS) {
-    try {
-      const answer = await fetch(mirror, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
-        body: `data=${encodeURIComponent(query)}`,
-        signal: AbortSignal.timeout(20000),
-      });
-      if (answer.ok) return ((await answer.json()) as { elements: Element[] }).elements;
-      last = `${answer.status}`;
-    } catch (error) {
-      last = String(error);
-    }
-  }
-  throw new Error(`The map servers are busy (${last})`);
-}
 
 type Raw = {
   type: 'node' | 'way' | 'relation';
@@ -95,22 +71,8 @@ export function assemble(raw: Raw[]): Element[] {
   return elements;
 }
 
-async function osmApi(path: string, headers: Record<string, string>): Promise<Element[]> {
-  const answer = await fetch(`${OSM_API}/${path}`, { headers, signal: AbortSignal.timeout(30000) });
-  if (!answer.ok) throw new Error(`The map did not answer (${answer.status})`);
-  return assemble(((await answer.json()) as { elements: Raw[] }).elements);
-}
-
-function later<T>(wait: number, run: () => Promise<T>): Promise<T> {
-  return new Promise((resolve, reject) => {
-    setTimeout(() => run().then(resolve, reject), wait);
-  });
-}
-
-const BACKUP_AFTER = 5000;
-
 export function outlineQuery(kind: Found['kind'], id: number): string {
-  return `[out:json][timeout:30];${kind}(${id});out geom;`;
+  return `[out:json][timeout:20];${kind}(${id});out geom;`;
 }
 
 export function campusQuery(bounds: Bounds): string {
@@ -124,7 +86,7 @@ export function campusQuery(bounds: Bounds): string {
     `nwr["natural"~"^(water|wood|scrub|sand|bare_rock|tree_row)$"]${box}`,
     `node["natural"="tree"]${box}`,
   ];
-  return `[out:json][timeout:60];(${parts.join(';')};);out body geom;`;
+  return `[out:json][timeout:25];(${parts.join(';')};);out body geom;`;
 }
 
 export function projector(center: LatLon): (point: LatLon) => Point {
@@ -142,12 +104,11 @@ export function unproject(center: LatLon, x: number, y: number): LatLon {
   return { lat: center.lat + y / perLat, lon: center.lon + x / perLon };
 }
 
-function outerRings(element: Element): LatLon[][] {
+function memberRings(element: Element, inner: boolean): LatLon[][] {
   const rings: LatLon[][] = [];
-  if (element.geometry) rings.push(element.geometry);
   const loose: LatLon[][] = [];
   for (const member of element.members ?? []) {
-    if (member.type !== 'way' || !member.geometry || member.role === 'inner') continue;
+    if (member.type !== 'way' || !member.geometry || (member.role === 'inner') !== inner) continue;
     loose.push([...member.geometry]);
   }
   while (loose.length > 0) {
@@ -169,6 +130,51 @@ function outerRings(element: Element): LatLon[][] {
     rings.push(ring);
   }
   return rings;
+}
+
+function outerRings(element: Element): LatLon[][] {
+  return [...(element.geometry ? [element.geometry] : []), ...memberRings(element, false)];
+}
+
+function signedArea(ring: Ring): number {
+  let sum = 0;
+  for (let i = 0; i < ring.length; i += 1) {
+    const [ax, ay] = ring[i];
+    const [bx, by] = ring[(i + 1) % ring.length];
+    sum += ax * by - bx * ay;
+  }
+  return sum / 2;
+}
+
+function side(a: Point, b: Point, c: Point): number {
+  return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
+}
+
+function crosses(a: Point, b: Point, c: Point, d: Point): boolean {
+  return side(a, b, c) * side(a, b, d) < 0 && side(c, d, a) * side(c, d, b) < 0;
+}
+
+function edgesOf(ring: Ring): [Point, Point][] {
+  return ring.map((point, index) => [point, ring[(index + 1) % ring.length]]);
+}
+
+export function withHoles(outer: Ring, holes: Ring[]): Ring {
+  let ring = signedArea(outer) < 0 ? [...outer].reverse() : [...outer];
+  const shaped = holes
+    .filter((hole) => hole.length >= 3)
+    .map((hole) => (signedArea(hole) > 0 ? [...hole].reverse() : [...hole]))
+    .sort((a, b) => Math.max(...b.map((point) => point[0])) - Math.max(...a.map((point) => point[0])));
+  for (const hole of shaped) {
+    let pick = 0;
+    for (let index = 1; index < hole.length; index += 1) if (hole[index][0] > hole[pick][0]) pick = index;
+    const from = hole[pick];
+    const walls = [...edgesOf(ring), ...shaped.flatMap(edgesOf)];
+    const order = ring.map((_, index) => index).sort((a, b) => Math.hypot(ring[a][0] - from[0], ring[a][1] - from[1]) - Math.hypot(ring[b][0] - from[0], ring[b][1] - from[1]));
+    const target = order.find((index) => !walls.some(([c, d]) => crosses(ring[index], from, c, d))) ?? order[0];
+    const loop = [...hole.slice(pick), ...hole.slice(0, pick), from];
+    ring = [...ring.slice(0, target + 1), ...loop, ring[target], ...ring.slice(target + 1)];
+  }
+  return ring;
 }
 
 function same(a: LatLon, b: LatLon): boolean {
@@ -305,13 +311,16 @@ export function buildCampus(name: string, place: string, center: LatLon, outline
       }
       continue;
     }
+    const holes = tags.building && element.type === 'relation' ? memberRings(element, true).filter(closed).map((raw) => open(raw.map(local))) : [];
     for (const raw of outerRings(element)) {
       const isClosed = closed(raw);
       const ring = open(raw.map(local));
       if (tags.building && tags.building !== 'no') {
         if (!isClosed || ring.length < 3) continue;
+        const inside = holes.filter((hole) => insideRing(ring, hole[0][0], hole[0][1]));
+        const shape = inside.length > 0 ? withHoles(ring, inside) : ring;
         const home = within(ring);
-        blocks.push({ id: element.id, ring, home, ...blockHeight(tags, ringArea(ring), home) });
+        blocks.push({ id: element.id, ring: shape, home, ...blockHeight(tags, ringArea(shape), home) });
         continue;
       }
       if (tags.highway) {
@@ -392,62 +401,228 @@ export function buildCampus(name: string, place: string, center: LatLon, outline
   return { name, place, center, boundary, clear, patches, strips, blocks, trees };
 }
 
-type PhotonAnswer = {
-  features: {
-    geometry: { coordinates: [number, number] };
-    properties: { osm_type?: string; osm_id?: number; name?: string; city?: string; county?: string; state?: string; country?: string };
-  }[];
+
+type PhotonProperties = {
+  osm_type?: string;
+  osm_id?: number;
+  osm_key?: string;
+  osm_value?: string;
+  name?: string;
+  housenumber?: string;
+  street?: string;
+  city?: string;
+  county?: string;
+  state?: string;
+  country?: string;
+  extent?: number[];
 };
 
-export async function findSchools(text: string, signal?: AbortSignal): Promise<Found[]> {
-  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&limit=7&lang=en&osm_tag=amenity:school`;
-  const answer = (await (await fetch(url, { signal })).json()) as PhotonAnswer;
-  const found: Found[] = [];
-  for (const feature of answer.features) {
-    const p = feature.properties;
-    if (!p.osm_id || !p.name) continue;
-    const kind = p.osm_type === 'R' ? 'relation' : p.osm_type === 'W' ? 'way' : 'node';
-    found.push({
-      kind,
-      id: p.osm_id,
-      name: p.name,
-      place: [p.city ?? p.county, p.state ?? p.country].filter(Boolean).join(', '),
-      lat: feature.geometry.coordinates[1],
-      lon: feature.geometry.coordinates[0],
-    });
-  }
-  return found;
+export type PhotonFeature = { geometry?: { coordinates?: number[] }; properties: PhotonProperties };
+
+const PHOTON = 'https://photon.komoot.io/api/';
+const OVERPASS = 'https://overpass-api.de/api/interpreter';
+const SCHOOLS = new Set(['school', 'college', 'university', 'kindergarten']);
+const NOT_AREAS = new Set(['highway', 'railway', 'waterway', 'place', 'boundary', 'route', 'power', 'barrier', 'aerialway', 'public_transport']);
+export const MOST_FOUND = 7;
+export const SEARCH_WAIT = 7000;
+export const STAGGER = 1200;
+export const MAP_BUDGET = 10000;
+
+function wordsOf(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((word) => word.length > 0);
 }
 
-export async function loadCampus(found: Found, headers: Record<string, string> = {}): Promise<Campus> {
-  let outline: LatLon[][] = [];
-  if (found.kind !== 'node') {
-    const shape = await Promise.any([
-      overpass(outlineQuery(found.kind, found.id), headers),
-      later(BACKUP_AFTER, () => osmApi(`${found.kind}/${found.id}/full.json`, headers)),
-    ]);
-    outline = shape
-      .filter((element) => element.type === found.kind && element.id === found.id)
-      .flatMap(outerRings)
-      .filter(closed);
+export function extentOf(raw: number[] | undefined): Bounds | null {
+  if (!Array.isArray(raw) || raw.length !== 4 || !raw.every((value) => Number.isFinite(value))) return null;
+  const [west, north, east, south] = raw;
+  return south <= north && west <= east ? { south, west, north, east } : null;
+}
+
+export function rankPlaces(features: PhotonFeature[], text: string): Found[] {
+  const words = new Set(wordsOf(text));
+  const ranked: { found: Found; group: number }[] = [];
+  const seen = new Set<string>();
+  for (const feature of features) {
+    const p = feature.properties ?? {};
+    const [lon, lat] = feature.geometry?.coordinates ?? [];
+    if (!p.osm_id || !Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    const address = [p.housenumber, p.street].filter(Boolean).join(' ');
+    const name = (p.name ?? address).trim();
+    if (name === '') continue;
+    const extent = extentOf(p.extent);
+    const numbered = Boolean(p.housenumber) && wordsOf(p.housenumber ?? '').every((word) => words.has(word));
+    const outlined = (p.osm_type === 'W' || p.osm_type === 'R') && extent !== null && !NOT_AREAS.has(p.osm_key ?? '');
+    const school = p.osm_key === 'amenity' && SCHOOLS.has(p.osm_value ?? '');
+    const group = school ? 0 : p.name && outlined && !numbered ? 1 : 2;
+    const area = outlined && group < 2;
+    const place = [p.city ?? p.county, p.state ?? p.country].filter(Boolean).join(', ');
+    const key = area ? `${p.osm_type}${p.osm_id}` : `${group} ${name.toLowerCase()} ${place}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const found: Found =
+      area && extent
+        ? { kind: p.osm_type === 'R' ? 'relation' : 'way', id: p.osm_id, name, place, lat, lon, extent }
+        : { kind: 'node', id: p.osm_id, name, place, lat, lon };
+    ranked.push({ found, group });
   }
-  const points = outline.flat();
-  const reach = 0.0016;
-  const bounds: Bounds =
-    points.length > 0
-      ? {
-          south: Math.min(...points.map((point) => point.lat)),
-          north: Math.max(...points.map((point) => point.lat)),
-          west: Math.min(...points.map((point) => point.lon)),
-          east: Math.max(...points.map((point) => point.lon)),
-        }
-      : { south: found.lat - reach, north: found.lat + reach, west: found.lon - reach * 1.2, east: found.lon + reach * 1.2 };
-  const center = { lat: (bounds.south + bounds.north) / 2, lon: (bounds.west + bounds.east) / 2 };
-  const pad = 0.0007;
-  const wide: Bounds = { south: bounds.south - pad, north: bounds.north + pad, west: bounds.west - pad * 1.2, east: bounds.east + pad * 1.2 };
-  const elements = await Promise.any([
-    overpass(campusQuery(wide), headers),
-    later(BACKUP_AFTER, () => osmApi(`map.json?bbox=${wide.west},${wide.south},${wide.east},${wide.north}`, headers)),
-  ]);
-  return buildCampus(found.name, found.place, center, outline, elements);
+  return ranked
+    .map((item, order) => ({ ...item, order }))
+    .sort((a, b) => a.group - b.group || a.order - b.order)
+    .slice(0, MOST_FOUND)
+    .map((item) => item.found);
+}
+
+export async function findPlaces(text: string, signal?: AbortSignal): Promise<Found[]> {
+  const controller = new AbortController();
+  const unlink = linked(signal, controller);
+  const timer = setTimeout(() => controller.abort(new Error('timed out')), SEARCH_WAIT);
+  try {
+    const answer = await fetch(`${PHOTON}?q=${encodeURIComponent(text)}&limit=15&lang=en`, { signal: controller.signal });
+    if (!answer.ok) throw new Error(`The search did not answer (${answer.status})`);
+    const body = (await answer.json()) as { features?: PhotonFeature[] };
+    return rankPlaces(Array.isArray(body.features) ? body.features : [], text);
+  } finally {
+    clearTimeout(timer);
+    unlink();
+  }
+}
+
+export const findSchools = findPlaces;
+
+const OVERPASS_REST = 5 * 60000;
+let overpassRest = 0;
+
+export function overpassResting(now = Date.now()): boolean {
+  return now < overpassRest;
+}
+
+async function askOverpass(query: string, headers: Record<string, string>, signal: AbortSignal): Promise<Element[]> {
+  try {
+    const answer = await fetch(OVERPASS, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded', ...headers },
+      body: `data=${encodeURIComponent(query)}`,
+      signal,
+    });
+    if (!answer.ok) throw new Error(`Overpass ${answer.status}`);
+    const body = (await answer.json()) as { elements?: Element[]; remark?: string };
+    if (!Array.isArray(body.elements) || /error|timed out|out of memory/i.test(body.remark ?? '')) throw new Error(`Overpass ${body.remark ?? 'empty'}`);
+    overpassRest = 0;
+    return body.elements;
+  } catch (error) {
+    if (!signal.aborted) overpassRest = Date.now() + OVERPASS_REST;
+    throw error;
+  }
+}
+
+function inTurn<T>(overpass: Source<T>, official: Source<T>): Source<T>[] {
+  return overpassResting() ? [official, overpass] : [overpass, official];
+}
+
+async function askOfficial(path: string, headers: Record<string, string>, signal: AbortSignal): Promise<Element[]> {
+  const answer = await fetch(`${OSM_API}/${path}`, { headers, signal });
+  if (!answer.ok) throw new Error(`OpenStreetMap ${answer.status}`);
+  const body = (await answer.json()) as { elements?: Raw[] };
+  if (!Array.isArray(body.elements)) throw new Error('OpenStreetMap empty');
+  return assemble(body.elements);
+}
+
+function ringsFor(elements: Element[], found: Found): LatLon[][] {
+  const mine = elements.filter((element) => element.type === found.kind && element.id === found.id);
+  if (mine.length === 0) throw new Error('The outline is missing');
+  return mine.flatMap(outerRings).filter(closed);
+}
+
+function outlineSources(found: Found, headers: Record<string, string>): Source<LatLon[][]>[] {
+  return inTurn(
+    async (signal) => ringsFor(await askOverpass(outlineQuery(found.kind, found.id), headers, signal), found),
+    async (signal) => ringsFor(await askOfficial(`${found.kind}/${found.id}/full.json`, headers, signal), found),
+  );
+}
+
+function contentsSources(box: Bounds, headers: Record<string, string>): Source<Element[]>[] {
+  return inTurn(
+    (signal) => askOverpass(campusQuery(box), headers, signal),
+    (signal) => askOfficial(`map.json?bbox=${box.west},${box.south},${box.east},${box.north}`, headers, signal),
+  );
+}
+
+const LEISURE = /^(pitch|track|playground|swimming_pool|park|garden)$/;
+const LANDUSE = /^(grass|meadow|recreation_ground|village_green)$/;
+const NATURAL = /^(water|wood|scrub|sand|bare_rock|tree_row)$/;
+const ORDER: Record<Element['type'], number> = { node: 0, way: 1, relation: 2 };
+
+export function relevant(element: Element): boolean {
+  const tags = element.tags ?? {};
+  if (tags.building !== undefined) return true;
+  if (element.type === 'way' && (tags.amenity === 'parking' || tags.highway !== undefined)) return true;
+  if (LEISURE.test(tags.leisure ?? '') || LANDUSE.test(tags.landuse ?? '') || NATURAL.test(tags.natural ?? '')) return true;
+  return element.type === 'node' && tags.natural === 'tree';
+}
+
+function reachOf(element: Element): Bounds | null {
+  if (element.type === 'node') {
+    if (element.lat === undefined || element.lon === undefined) return null;
+    return { south: element.lat, north: element.lat, west: element.lon, east: element.lon };
+  }
+  const rings: LatLon[][] = [];
+  if (element.geometry) rings.push(element.geometry.filter(Boolean));
+  for (const member of element.members ?? []) if (member.geometry) rings.push(member.geometry.filter(Boolean));
+  return boundsOf(rings);
+}
+
+export function tidy(elements: Element[], box: Bounds): Element[] {
+  const seen = new Set<string>();
+  const kept: Element[] = [];
+  for (const element of elements) {
+    const key = `${element.type} ${element.id}`;
+    if (seen.has(key) || !relevant(element)) continue;
+    const reach = reachOf(element);
+    if (!reach || !touches(reach, box)) continue;
+    seen.add(key);
+    kept.push(element);
+  }
+  return kept.sort((a, b) => ORDER[a.type] - ORDER[b.type] || a.id - b.id);
+}
+
+export type LoadOptions = { signal?: AbortSignal; budget?: number; stagger?: number };
+
+function campusOf(found: Found, area: Area, elements: Element[]): Campus {
+  return buildCampus(found.name, found.place, area.center, area.rings, elements);
+}
+
+export async function loadCampus(found: Found, headers: Record<string, string> = {}, options: LoadOptions = {}): Promise<Campus> {
+  const controller = new AbortController();
+  const unlink = linked(options.signal, controller);
+  const deadline = Date.now() + (options.budget ?? MAP_BUDGET);
+  const gap = options.stagger ?? STAGGER;
+  const contents = (box: Bounds, signal: AbortSignal) => firstOf(contentsSources(box, headers), gap, deadline, signal);
+  try {
+    if (found.kind === 'node') {
+      const area = squareArea(found);
+      const want = padded(area.bounds);
+      return campusOf(found, area, tidy(await contents(want, controller.signal), want));
+    }
+    const guess = plannedBounds(found, found.extent);
+    const ahead = new AbortController();
+    const unlinkAhead = linked(controller.signal, ahead);
+    const early = guess ? contents(padded(guess), ahead.signal) : null;
+    early?.catch(() => undefined);
+    try {
+      const rings = await firstOf(outlineSources(found, headers), gap, deadline, controller.signal);
+      const area = areaOf(found, rings);
+      const want = padded(area.bounds);
+      if (early && guess && covers(padded(guess), want)) return campusOf(found, area, tidy(await early, want));
+      ahead.abort(new Stopped('replaced'));
+      return campusOf(found, area, tidy(await contents(want, controller.signal), want));
+    } finally {
+      unlinkAhead();
+    }
+  } finally {
+    controller.abort(new Stopped('done'));
+    unlink();
+  }
 }
