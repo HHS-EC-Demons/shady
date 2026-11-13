@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Slider } from '@/components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { enrich } from '@/engine/aerial';
 import { SURFACES, surfaceChoices, type Campus, type Surface } from '@/engine/campus';
 import { centerOf } from '@/engine/geometry';
 import { DAY_END, DAY_START, RAMP, TOUCH_LIMIT } from '@/engine/heat';
@@ -21,12 +22,12 @@ import { warmUp } from '@/engine/remote';
 import { decodePlan } from '@/engine/share';
 import { clockLabel } from '@/engine/sun';
 import { hottestDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
-import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Saved, type Tool } from './controller';
+import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Cut, type Saved, type Tool } from './controller';
 import { quality } from './quality';
 import { SchoolPicker } from './SchoolPicker';
 import { OpenShared } from './ShareDialogs';
 import { adopt, clashes, dropHash, sharedBundle, sharedText, watchHash } from './shared';
-import { editHeight, editSurface, keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
+import { cutTree, editHeight, editSurface, keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
 
 const YardCanvas = lazy(() => import('./YardCanvas'));
 
@@ -215,7 +216,7 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first }: Lo
     if (event.key === 'Enter' || event.key === ' ') {
       event.preventDefault();
       const done = yard.actAtCursor();
-      const words = { planted: 'Tree planted', sail: 'Sail placed', asked: 'Type the reading', picked: 'Selected', none: 'Nothing placed here' };
+      const words = { planted: 'Tree planted', sail: 'Sail placed', asked: 'Type the reading', picked: 'Selected', removed: 'Tree removed', restored: 'Tree back', none: 'Nothing placed here' };
       setSaid(words[done]);
       return;
     }
@@ -476,7 +477,7 @@ export default function YardStage({ base }: { base: string }) {
   const first = useRef(true);
   const turns = useRef(0);
 
-  const show = async (next: Bundle, live?: Weather, minute?: number, raising?: number, saved?: Saved): Promise<void> => {
+  const show = async (next: Bundle, live?: Weather, minute?: number, raising?: number, saved?: Saved, tool?: Tool): Promise<void> => {
     turns.current += 1;
     const turn = turns.current;
     bundle.current = next;
@@ -500,6 +501,9 @@ export default function YardStage({ base }: { base: string }) {
       kept = { key, bundle: next, weather, yard: built };
     }
     if (turn !== turns.current) return;
+    built.gone = next.was?.trees ?? [];
+    built.cutter = cutAt;
+    if (tool) built.setTool(tool);
     if (raising !== undefined) built.pickBlock(raising);
     if (minute !== undefined) built.setMinute(minute);
     else if (live) built.setMinute(minuteNow(live));
@@ -569,8 +573,8 @@ export default function YardStage({ base }: { base: string }) {
           return;
         }
         setStatus('Loading its hottest day of the year');
-        const weather = await hottestDay(campus.center.lat, campus.center.lon);
-        next = { campus, weather, school: found };
+        const [seen, weather] = await Promise.all([enrich(campus), hottestDay(campus.center.lat, campus.center.lon)]);
+        next = { campus: seen, weather, school: found };
         keepSchool(next);
       }
       setStatus('Heating the ground');
@@ -636,6 +640,17 @@ export default function YardStage({ base }: { base: string }) {
     const next = editSurface(current, patch, surface);
     keepSchool(next);
     void show(next, yard.weather.live ? yard.weather : undefined, yard.minute);
+  };
+
+  const cutAt = (x: number, y: number): Cut | null => {
+    const current = bundle.current;
+    const shown = kept?.yard;
+    if (!current || !shown) return null;
+    const next = cutTree(current, x, y);
+    if (!next) return null;
+    keepSchool(next);
+    void show(next, shown.weather.live ? shown.weather : undefined, shown.minute, undefined, undefined, shown.tool);
+    return next.campus.trees.length < current.campus.trees.length ? 'removed' : 'restored';
   };
 
   const raise = (block: number, height: number) => {

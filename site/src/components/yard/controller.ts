@@ -1,4 +1,4 @@
-import { SURFACES, SURFACE_ORDER, atHome, campusMiddle, campusRadius, placeAt, type Campus, type Ground, type Surface, type Tree } from '@/engine/campus';
+import { SURFACES, SURFACE_ORDER, atHome, campusMiddle, campusRadius, placeAt, treeAt, type Campus, type Ground, type Surface, type Tree } from '@/engine/campus';
 import type { Contact } from '@/engine/contact';
 import type { RoofUnit } from '@/engine/roof';
 import { clamp, insideRing, ringDistance, type Point } from '@/engine/geometry';
@@ -17,6 +17,7 @@ export type PlanTree = Tree & { id: number };
 export type Probe = { x: number; y: number; now: number; bare: number; surface: Surface; place: string; home: boolean };
 export type Focus = { x: number; y: number; span: number } | null;
 export type Saved = { trees: PlanTree[]; sails: Sail[]; years?: number; readings?: Reading[] };
+export type Cut = 'removed' | 'restored';
 
 export { GROWTH_FEET, START_FEET, TREE_TALL, YEARS, treeHeight, treeRadius } from '@/engine/growth';
 export const SAIL_HEIGHT = 4.5;
@@ -73,6 +74,8 @@ export class Yard {
   planting = 0;
   focus: Focus = null;
   focusTurn = 0;
+  cutter: ((x: number, y: number) => Cut | null) | null = null;
+  gone: Tree[] = [];
   heat = 0;
   frame = 0;
   version = 0;
@@ -296,9 +299,13 @@ export class Yard {
     this.emit();
   }
 
+  standing(x: number, y: number): boolean {
+    return treeAt(this.campus.trees, x, y) >= 0 || treeAt(this.gone, x, y) >= 0;
+  }
+
   canPlant(x: number, y: number, skip?: number): boolean {
     const index = cellAt(this.ground.grid, x, y);
-    if (index < 0 || !this.ground.open[index]) return false;
+    if (index < 0 || !this.ground.open[index] || treeAt(this.campus.trees, x, y) >= 0) return false;
     for (const block of this.campus.blocks) {
       if (block.home && ringDistance(block.ring, x, y) < BUILDING_GAP) return false;
     }
@@ -309,7 +316,7 @@ export class Yard {
   }
 
   hint(x: number, y: number): void {
-    this.ghost = { x, y, ok: this.canPlant(x, y) };
+    this.ghost = this.cutter && this.standing(x, y) ? null : { x, y, ok: this.canPlant(x, y) };
   }
 
   setYears(years: number): void {
@@ -324,6 +331,10 @@ export class Yard {
   plant(atX: number, atY: number): number | null {
     const x = snap(atX);
     const y = snap(atY);
+    if (this.cutter && this.standing(x, y)) {
+      this.cutter(x, y);
+      return null;
+    }
     if (!this.canPlant(x, y)) return null;
     const id = this.nextId;
     this.nextId += 1;
@@ -415,9 +426,10 @@ export class Yard {
     return best;
   }
 
-  actAtCursor(): 'planted' | 'sail' | 'asked' | 'picked' | 'none' {
+  actAtCursor(): 'planted' | 'sail' | 'asked' | 'picked' | Cut | 'none' {
     if (!this.cursor) return 'none';
     const { x, y } = this.cursor;
+    if (this.tool === 'tree' && this.cutter && this.standing(x, y)) return this.cutter(x, y) ?? 'none';
     if (this.tool === 'tree') return this.plant(x, y) === null ? 'none' : 'planted';
     if (this.tool === 'sail') {
       const id = this.startSail(x - 4.5, y - 4.5);

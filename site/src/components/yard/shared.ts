@@ -1,9 +1,11 @@
-import { surfaceChoices } from '@/engine/campus';
+import { enrich } from '@/engine/aerial';
+import { surfaceChoices, treeAt } from '@/engine/campus';
+import type { Point } from '@/engine/geometry';
 import { loadCampus, type Found } from '@/engine/osm';
 import { HASH, LIMITS, type HeightFix, type Plan, type SurfaceFix } from '@/engine/share';
 import { hottestDay } from '@/engine/weather';
 import { treeHeight, treeRadius, type Saved, type Yard } from './controller';
-import { editHeight, editSurface, homeBundle, keepSaved, keepSchool, keptSchool, planKey, storedPlan, type Bundle } from './store';
+import { cutTree, editHeight, editSurface, homeBundle, keepSaved, keepSchool, keptSchool, planKey, storedPlan, type Bundle } from './store';
 
 const FEET = 3.28084;
 
@@ -24,7 +26,7 @@ export function watchHash(): () => void {
   return () => window.removeEventListener('hashchange', changed);
 }
 
-type Fixes = { surfaces: SurfaceFix[]; heights: HeightFix[] };
+type Fixes = { surfaces: SurfaceFix[]; heights: HeightFix[]; cut: Point[] };
 
 export function fixesOf(bundle: Bundle): Fixes {
   const { campus, was = {} } = bundle;
@@ -46,13 +48,14 @@ export function fixesOf(bundle: Bundle): Fixes {
   }
   surfaces.sort((a, b) => a.patch - b.patch);
   heights.sort((a, b) => a.building - b.building || a.nth - b.nth);
-  return { surfaces, heights };
+  const cut = (was.trees ?? []).map((tree): Point => [Math.round(tree.x * 10) / 10, Math.round(tree.y * 10) / 10]);
+  return { surfaces, heights, cut };
 }
 
 export function planOf(bundle: Bundle, yard: Yard): Plan | null {
   if (bundle.school === undefined) return null;
-  const fixes = fixesOf(bundle);
-  if (yard.trees.length > LIMITS.trees || yard.sails.length > LIMITS.sails || fixes.surfaces.length + fixes.heights.length > LIMITS.fixes) return null;
+  const { cut, ...fixes } = fixesOf(bundle);
+  if (yard.trees.length > LIMITS.trees || yard.sails.length > LIMITS.sails || fixes.surfaces.length + fixes.heights.length > LIMITS.fixes || cut.length > LIMITS.cut) return null;
   const school = bundle.school ? { kind: bundle.school.kind, id: bundle.school.id, name: bundle.school.name, lat: bundle.school.lat, lon: bundle.school.lon } : null;
   return {
     version: 1,
@@ -62,6 +65,7 @@ export function planOf(bundle: Bundle, yard: Yard): Plan | null {
     trees: yard.trees.map((tree) => [tree.x, tree.y]),
     sails: yard.sails.map((sail) => ({ corners: sail.corners, height: sail.height })),
     ...fixes,
+    ...(cut.length > 0 ? { cut } : {}),
   };
 }
 
@@ -78,8 +82,8 @@ export async function sharedBundle(plan: Plan, base: string, say: (text: string)
     const campus = await loadCampus(found);
     if (campus.blocks.filter((block) => block.home).length + campus.patches.length === 0) return null;
     say('Loading its hottest day of the year');
-    const weather = await hottestDay(campus.center.lat, campus.center.lon, Date.now(), plan.date);
-    bundle = { campus, weather, school: found };
+    const [seen, weather] = await Promise.all([enrich(campus), hottestDay(campus.center.lat, campus.center.lon, Date.now(), plan.date)]);
+    bundle = { campus: seen, weather, school: found };
   }
   for (const fix of plan.surfaces) {
     const patch = bundle.campus.patches[fix.patch];
@@ -96,6 +100,9 @@ export async function sharedBundle(plan: Plan, base: string, say: (text: string)
       seen += 1;
     }
   }
+  for (const [x, y] of plan.cut ?? []) {
+    if (treeAt(bundle.campus.trees, x, y) >= 0) bundle = cutTree(bundle, x, y) ?? bundle;
+  }
   return bundle;
 }
 
@@ -106,10 +113,10 @@ function near(a: number, b: number): boolean {
 export function clashes(bundle: Bundle, plan: Plan): boolean {
   const mine = storedPlan(bundle.campus);
   const current = keptSchool();
-  const mineFixes: Fixes = current && planKey(current.campus) === planKey(bundle.campus) ? fixesOf(current) : { surfaces: [], heights: [] };
+  const mineFixes: Fixes = current && planKey(current.campus) === planKey(bundle.campus) ? fixesOf(current) : { surfaces: [], heights: [], cut: [] };
   const trees = mine?.trees ?? [];
   const sails = mine?.sails ?? [];
-  if (trees.length + sails.length + mineFixes.surfaces.length + mineFixes.heights.length === 0) return false;
+  if (trees.length + sails.length + mineFixes.surfaces.length + mineFixes.heights.length + mineFixes.cut.length === 0) return false;
   const sameTrees = trees.length === plan.trees.length && trees.every((tree, index) => near(tree.x, plan.trees[index][0]) && near(tree.y, plan.trees[index][1]));
   const sameSails =
     sails.length === plan.sails.length &&

@@ -1,9 +1,9 @@
-import type { Campus, Surface } from '@/engine/campus';
+import { treeAt, type Campus, type Surface, type Tree } from '@/engine/campus';
 import type { Found } from '@/engine/osm';
 import type { Weather } from '@/engine/weather';
 import type { Saved, Yard } from './controller';
 
-export type Was = { patches?: Record<string, Surface>; blocks?: Record<string, number> };
+export type Was = { patches?: Record<string, Surface>; blocks?: Record<string, number>; trees?: Tree[] };
 export type Bundle = { campus: Campus; weather: Weather; school?: Found | null; was?: Was };
 
 const SCHOOL = 'shady.school.v1';
@@ -84,6 +84,19 @@ export function editHeight(bundle: Bundle, block: number, height: number): Bundl
   const original = was.blocks?.[block] ?? bundle.campus.blocks[block].height;
   const blocks = bundle.campus.blocks.map((item, index) => (index === block ? { ...item, height, guessed: false } : item));
   return { ...bundle, campus: { ...bundle.campus, blocks }, was: { ...was, blocks: { ...was.blocks, [block]: original } } };
+}
+
+export function cutTree(bundle: Bundle, x: number, y: number): Bundle | null {
+  const was = bundle.was ?? {};
+  const trees = bundle.campus.trees;
+  const gone = was.trees ?? [];
+  const hit = treeAt(trees, x, y);
+  if (hit >= 0) {
+    return { ...bundle, campus: { ...bundle.campus, trees: trees.filter((_, index) => index !== hit) }, was: { ...was, trees: [...gone, trees[hit]] } };
+  }
+  const back = treeAt(gone, x, y);
+  if (back < 0) return null;
+  return { ...bundle, campus: { ...bundle.campus, trees: [...trees, gone[back]] }, was: { ...was, trees: gone.filter((_, index) => index !== back) } };
 }
 
 export function storedPlan(campus: Campus): Saved | null {

@@ -1,9 +1,14 @@
-import { deflateRawSync } from 'node:zlib';
+import { deflateRawSync, inflateRawSync } from 'node:zlib';
 import { describe, expect, it } from 'vitest';
 import { LIMITS, decodePlan, encodePlan, linkFor, type Plan } from './share';
 
 function plain(body: unknown): string {
   return `j${Buffer.from(JSON.stringify(body)).toString('base64url')}`;
+}
+
+function bodyOf(text: string): Record<string, unknown> {
+  const bytes = Buffer.from(text.slice(1), 'base64url');
+  return JSON.parse((text[0] === 'z' ? inflateRawSync(bytes) : bytes).toString()) as Record<string, unknown>;
 }
 
 function packed(text: string): string {
@@ -73,6 +78,30 @@ describe('share links', () => {
     const text = await encodePlan({ ...full, trees });
     expect(text.length).toBeLessThan(700);
     expect(text[0]).toBe('z');
+  });
+
+  it('round trips removed trees in an optional key', async () => {
+    const cut: [number, number][] = [
+      [-23.4, 151.2],
+      [88, -0.1],
+    ];
+    const plan: Plan = { ...full, cut };
+    expect(await decodePlan(await encodePlan(plan))).toEqual(plan);
+    expect(bodyOf(await encodePlan(plan)).c).toEqual([-234, 1512, 880, -1]);
+  });
+
+  it('reads an older link with no removed trees', async () => {
+    const plan = await decodePlan(plain({ ...base, t: [10, 20] }));
+    expect(plan).not.toBeNull();
+    expect(plan?.cut).toBeUndefined();
+    expect(bodyOf(await encodePlan(full)).c).toBeUndefined();
+  });
+
+  it('returns null for a bad removed tree list', async () => {
+    expect(await decodePlan(plain({ ...base, c: [1, 2, 3] }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, c: [1.5, 2] }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, c: '1,2' }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, c: Array.from({ length: (LIMITS.cut + 1) * 2 }, () => 5) }))).toBeNull();
   });
 
   it('builds the link under the plan page with the plan in the hash', () => {

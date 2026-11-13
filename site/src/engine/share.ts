@@ -16,9 +16,10 @@ export type Plan = {
   sails: SharedSail[];
   surfaces: SurfaceFix[];
   heights: HeightFix[];
+  cut?: Point[];
 };
 
-export const LIMITS = { trees: 500, sails: 50, fixes: 200, name: 120, text: 32768, bytes: 131072 };
+export const LIMITS = { trees: 500, sails: 50, fixes: 200, cut: 800, name: 120, text: 32768, bytes: 131072 };
 export const HASH = '#plan=';
 
 const REACH = 100000;
@@ -49,6 +50,7 @@ function compact(plan: Plan): string {
   if (plan.sails.length > 0) body.a = plan.sails.map((sail) => [...sail.corners.flatMap(([x, y]) => [decimetres(x), decimetres(y)]), decimetres(sail.height)]);
   if (plan.surfaces.length > 0) body.f = plan.surfaces.map((fix) => [fix.patch, SURFACES[fix.from].code, SURFACES[fix.to].code]);
   if (plan.heights.length > 0) body.h = plan.heights.map((fix) => [fix.building, fix.nth, fix.feet]);
+  if (plan.cut && plan.cut.length > 0) body.c = plan.cut.flatMap(([x, y]) => [decimetres(x), decimetres(y)]);
   return JSON.stringify(body);
 }
 
@@ -187,7 +189,13 @@ function readPlan(body: unknown): Plan | null {
     heights.push({ building: item[0], nth: item[1], feet: item[2] });
   }
 
-  return { version: 1, school, date: body.d, years: body.y, trees, sails, surfaces, heights };
+  const rawCut = listOf(body.c, LIMITS.cut * 2);
+  if (!rawCut || rawCut.length % 2 !== 0 || !rawCut.every((value) => whole(value, -REACH, REACH))) return null;
+  const cut: Point[] = [];
+  for (let index = 0; index < rawCut.length; index += 2) cut.push([(rawCut[index] as number) / 10, (rawCut[index + 1] as number) / 10]);
+
+  const plan: Plan = { version: 1, school, date: body.d, years: body.y, trees, sails, surfaces, heights };
+  return cut.length > 0 ? { ...plan, cut } : plan;
 }
 
 export async function decodePlan(text: unknown): Promise<Plan | null> {
