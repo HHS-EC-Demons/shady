@@ -476,6 +476,10 @@
   animation: shade-in 260ms var(--ease) both;
 }
 
+@page {
+  margin: 12mm;
+}
+
 @media print {
   html,
   body {

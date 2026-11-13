@@ -86,7 +86,7 @@ function Map({ yard }: { yard: Yard }) {
   return (
     <svg
       viewBox={`${box.minX} ${-box.maxY} ${wide} ${tall}`}
-      className="h-auto max-h-[78vh] w-full rounded-lg border border-rule bg-raised print:max-h-none"
+      className="h-auto max-h-[78vh] w-full rounded-lg border border-rule bg-raised print:float-left print:mr-6 print:max-h-[190mm] print:w-[46%]"
       role="img"
       aria-label={`Map of ${yard.campus.name} with ${yard.trees.length} planned trees and ${yard.sails.length} planned sails`}
     >
@@ -273,7 +273,7 @@ function Sheet({ yard, bundle, base }: { yard: Yard; bundle: Bundle; base: strin
   ];
 
   return (
-    <div className="shell mx-auto flex max-w-[1180px] flex-col gap-10 pb-20 pt-6 [&>*]:min-w-0">
+    <div className="shell mx-auto flex max-w-[1180px] flex-col gap-10 pb-20 pt-6 print:block print:pb-0 [&>*]:min-w-0 print:[&>*+*]:mt-8">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <h1 className="mr-auto text-[clamp(2.25rem,4.4vw,3.75rem)]">Shade plan</h1>
         {planned ? (
@@ -302,40 +302,42 @@ function Sheet({ yard, bundle, base }: { yard: Yard; bundle: Bundle; base: strin
         )}
       </div>
 
-      <div className="grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)]">
+      <div className="grid grid-cols-[minmax(0,1fr)] gap-8 lg:grid-cols-[minmax(0,5fr)_minmax(0,6fr)] print:block">
         <Map yard={yard} />
-        <div className="flex min-w-0 flex-col gap-8">
-          <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-5">
+        <div className="flex min-w-0 flex-col gap-8 print:block">
+          <dl className="m-0 grid grid-cols-2 gap-x-6 gap-y-5 print:grid-cols-1 print:gap-y-4">
             {figures.map((figure) => (
-              <div key={figure.label} className={`border-t border-rule pt-3 ${figure.wide ? 'col-span-2' : ''}`}>
+              <div key={figure.label} className={`border-t border-rule pt-3 ${figure.wide ? 'col-span-2 print:col-span-1' : ''}`}>
                 <dt className="text-[0.9375rem] text-soft">{figure.label}</dt>
                 <dd className="data m-0 text-[1.5rem] font-semibold leading-tight">{figure.value}</dd>
               </div>
             ))}
           </dl>
 
-          <Table className="hidden sm:table">
-            <TableHeader>
-              <TableRow>
-                <TableHead>Place</TableHead>
-                <TableHead className="text-right">Peak</TableHead>
-                <TableHead>Over {TOUCH_LIMIT}°F</TableHead>
-                <TableHead className="text-right">Walk to shade</TableHead>
-                {planned && <TableHead className="text-right">With plan</TableHead>}
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {places.map(({ before: was, walk, walkAfter }) => (
-                <TableRow key={was.label}>
-                  <TableCell className="font-medium">{was.label}</TableCell>
-                  <TableCell className="data text-right">{Math.round(was.peak)}°F</TableCell>
-                  <TableCell className="data">{hotHours(was)}</TableCell>
-                  <TableCell className="data text-right">{feet(walk)}</TableCell>
-                  {planned && <TableCell className={`data text-right ${walk - walkAfter >= 3 ? 'font-semibold text-leaf' : ''}`}>{feet(walkAfter)}</TableCell>}
+          <div className="hidden sm:block print:clear-both print:break-inside-avoid print:pt-8">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Place</TableHead>
+                  <TableHead className="text-right">Peak</TableHead>
+                  <TableHead>Over {TOUCH_LIMIT}°F</TableHead>
+                  <TableHead className="text-right">Walk to shade</TableHead>
+                  {planned && <TableHead className="text-right">With plan</TableHead>}
                 </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+              </TableHeader>
+              <TableBody>
+                {places.map(({ before: was, walk, walkAfter }) => (
+                  <TableRow key={was.label}>
+                    <TableCell className="font-medium">{was.label}</TableCell>
+                    <TableCell className="data text-right">{Math.round(was.peak)}°F</TableCell>
+                    <TableCell className="data">{hotHours(was)}</TableCell>
+                    <TableCell className="data text-right">{feet(walk)}</TableCell>
+                    {planned && <TableCell className={`data text-right ${walk - walkAfter >= 3 ? 'font-semibold text-leaf' : ''}`}>{feet(walkAfter)}</TableCell>}
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
           <ul className="m-0 list-none p-0 sm:hidden">
             {places.map(({ before: was, walk, walkAfter }) => (
               <li key={was.label} className="border-t border-rule py-3">
