@@ -1,10 +1,13 @@
-import { SURFACES, SURFACE_ORDER, atHome, campusMiddle, campusRadius, placeAt, rasterize, simCell, type Campus, type Ground, type Surface, type Tree } from '@/engine/campus';
+import { SURFACES, SURFACE_ORDER, atHome, campusMiddle, campusRadius, placeAt, type Campus, type Ground, type Surface, type Tree } from '@/engine/campus';
+import type { Contact } from '@/engine/contact';
+import type { RoofUnit } from '@/engine/roof';
 import { clamp, insideRing, ringDistance, type Point } from '@/engine/geometry';
-import { DAY_END, DAY_START, FULL_SUN, airAt, backdropOf, decode, hottestMinute, simulate, stepAt, tally, temperatureAt, type Backdrop, type HeatDay, type Tally } from '@/engine/heat';
+import { DAY_END, DAY_START, FULL_SUN, airAt, decode, stepAt, tally, temperatureAt, type Backdrop, type HeatDay, type Tally } from '@/engine/heat';
 import { YEARS, treeHeight, treeRadius } from '@/engine/growth';
 import { Planner } from '@/engine/planner';
 import { cellAt, ellipseSpans, polygonSpans, type Span } from '@/engine/raster';
-import { shadowShift, treeShadow, type Sail } from '@/engine/shade';
+import { openBench, type Bench } from '@/engine/remote';
+import { shadowShift, treeShadow, type Obstacles, type Sail } from '@/engine/shade';
 import { sunAt, utcFor, type SunRay } from '@/engine/sun';
 import { hourly, type Weather } from '@/engine/weather';
 
@@ -27,6 +30,14 @@ const RISE_FAST = Float32Array.from(RISE);
 const DEGREES_AT_ZERO = decode(0);
 const DEGREES_PER_STEP = decode(1) - decode(0);
 
+export function probeHeight(yard: Yard): number {
+  return yard.radius * 0.07;
+}
+
+export function sunReach(yard: Yard): number {
+  return yard.radius * 0.72;
+}
+
 export class Yard {
   readonly campus: Campus;
   readonly weather: Weather;
@@ -34,6 +45,9 @@ export class Yard {
   readonly middle: Point;
   readonly radius: number;
   readonly backdrop: Backdrop;
+  readonly contact: Contact;
+  readonly roof: RoofUnit[];
+  readonly paving: Float32Array;
   readonly bare: HeatDay;
   readonly sunrise: number;
   readonly sunset: number;
@@ -67,19 +81,29 @@ export class Yard {
   private cooledArea = 0;
   private listeners = new Set<() => void>();
   private tallies = new Map<string, Tally>();
+  private readonly bench: Bench;
+  private asked = 0;
+  private shownTurn = 0;
+  private flight = 0;
+  private plantAsk = 0;
+  private waiters: (() => void)[] = [];
 
-  constructor(campus: Campus, weather: Weather) {
+  static async open(campus: Campus, weather: Weather, spare = 0): Promise<Yard> {
+    return new Yard(campus, weather, await openBench(campus, weather, spare));
+  }
+
+  constructor(campus: Campus, weather: Weather, bench: Bench) {
     this.campus = campus;
     this.weather = weather;
-    this.ground = rasterize(campus, simCell(campus));
+    this.bench = bench;
+    this.ground = bench.ground;
     this.middle = campusMiddle(campus);
     this.radius = campusRadius(campus);
-    this.backdrop = backdropOf(this.ground, weather, campus.center.lat, campus.center.lon, {
-      blocks: campus.blocks,
-      trees: campus.trees,
-      sails: [],
-    });
-    this.bare = simulate(this.ground, weather, this.backdrop);
+    this.backdrop = bench.backdrop;
+    this.contact = bench.contact;
+    this.roof = bench.roof;
+    this.paving = bench.paving;
+    this.bare = bench.bare;
     this.day = this.bare;
     let rise = DAY_START;
     let set = DAY_END;
@@ -92,8 +116,21 @@ export class Yard {
     }
     this.sunrise = rise;
     this.sunset = set;
-    this.peak = hottestMinute(this.bare, this.ground);
+    this.peak = bench.peak;
     this.minute = this.peak;
+  }
+
+  simulate(added: Obstacles, lane = 0): Promise<HeatDay> {
+    return this.bench.simulate(added, lane);
+  }
+
+  close(): void {
+    this.bench.close();
+  }
+
+  settled(): Promise<void> {
+    if (!this.working()) return Promise.resolve();
+    return new Promise((resolve) => this.waiters.push(resolve));
   }
 
   subscribe = (listener: () => void): (() => void) => {
@@ -436,6 +473,7 @@ export class Yard {
 
   commit(): void {
     if (this.dirty) this.resim();
+    this.settle();
     this.emit();
   }
 
@@ -448,6 +486,12 @@ export class Yard {
   startAuto(count: number): void {
     if (this.planting > 0) return;
     if (this.dirty) this.resim();
+    if (this.flight !== 0) {
+      this.plantAsk = count;
+      this.planting = count;
+      this.emit();
+      return;
+    }
     const planner = new Planner(this.campus, this.ground, this.day, this.weather, treeRadius(this.years), treeHeight(this.years));
     planner.block(this.trees);
     this.queue = [];
@@ -503,11 +547,11 @@ export class Yard {
   }
 
   tick(time: number): void {
-    if (this.planting > 0 && time - this.lastAuto > AUTO_GAP) {
+    if (this.plantAsk === 0 && this.planting > 0 && time - this.lastAuto > AUTO_GAP) {
       this.autoStep();
       this.lastAuto = performance.now();
     }
-    if (this.dirty && time - this.lastSim > RESIM_GAP) {
+    if (this.dirty && this.flight === 0 && time - this.lastSim > RESIM_GAP) {
       this.resim();
       this.lastSim = performance.now();
       this.emit();
@@ -515,20 +559,57 @@ export class Yard {
   }
 
   private resim(): void {
-    const empty = this.trees.length + this.sails.length === 0;
-    this.day = empty ? this.bare : simulate(this.ground, this.weather, this.backdrop, { blocks: [], trees: this.trees, sails: this.sails });
     this.dirty = false;
-    this.heat += 1;
-    this.frame += 1;
-    this.tallies.clear();
-    if (this.probe) this.probeAt(this.probe.x, this.probe.y, true);
+    this.asked += 1;
+    const turn = this.asked;
+    if (this.trees.length + this.sails.length === 0) {
+      this.apply(this.bare, turn);
+      return;
+    }
+    if (this.flight !== 0) {
+      this.dirty = true;
+      return;
+    }
+    this.flight = turn;
+    void this.bench.simulate({ blocks: [], trees: this.trees, sails: this.sails }).then((day) => {
+      if (this.flight === turn) this.flight = 0;
+      this.apply(day, turn);
+      this.emit();
+    });
+  }
+
+  private apply(day: HeatDay, turn: number): void {
+    if (turn > this.shownTurn) {
+      this.shownTurn = turn;
+      this.day = day;
+      this.heat += 1;
+      this.frame += 1;
+      this.tallies.clear();
+      if (this.probe) this.probeAt(this.probe.x, this.probe.y, true);
+    }
+    this.settle();
+  }
+
+  private settle(): void {
+    if (this.dirty || this.flight !== 0) return;
+    if (this.plantAsk > 0) {
+      const count = this.plantAsk;
+      this.plantAsk = 0;
+      this.planting = 0;
+      this.startAuto(count);
+    }
+    if (this.planting > 0 || this.dirty || this.flight !== 0) return;
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const done of waiters) done();
   }
 
   tallyOf(which: 'day' | 'bare', minute = this.minute): Tally {
-    const key = `${which} ${Math.round(minute)} ${which === 'day' ? this.heat : 0}`;
+    const day = which === 'day' ? this.day : this.bare;
+    const key = day === this.bare ? `bare ${Math.round(minute)} 0` : `day ${Math.round(minute)} ${this.heat}`;
     let result = this.tallies.get(key);
     if (!result) {
-      result = tally(which === 'day' ? this.day : this.bare, this.ground, minute);
+      result = tally(day, this.ground, minute);
       if (this.tallies.size > 400) this.tallies.clear();
       this.tallies.set(key, result);
     }
@@ -605,10 +686,14 @@ export class Yard {
   }
 
   working(): boolean {
-    return this.planting > 0 || this.dirty;
+    return this.planting > 0 || this.dirty || this.flight !== 0;
   }
 
   private shown: Int32Array | null = null;
+
+  readyCells(): void {
+    this.shownCells();
+  }
 
   private shownCells(): Int32Array {
     if (this.shown) return this.shown;

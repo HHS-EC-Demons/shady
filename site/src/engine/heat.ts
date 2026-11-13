@@ -1,4 +1,4 @@
-import { SURFACES, SURFACE_ORDER, type Ground } from './campus';
+import { SURFACES, SURFACE_ORDER, rasterize, simCell, type Campus, type Ground } from './campus';
 import { clamp } from './geometry';
 import type { Grid } from './raster';
 import { addShadows, castShadows, type Obstacles } from './shade';
@@ -87,6 +87,20 @@ export function simulate(ground: Ground, weather: Weather, backdrop: Backdrop, a
     }
   }
   return { grid, cells, temps, light: lightAll, air, rays: backdrop.rays };
+}
+
+export type Opened = { ground: Ground; backdrop: Backdrop; bare: HeatDay; peak: number };
+
+export function prepareCampus(campus: Campus, weather: Weather): { ground: Ground; backdrop: Backdrop } {
+  const ground = rasterize(campus, simCell(campus));
+  const backdrop = backdropOf(ground, weather, campus.center.lat, campus.center.lon, { blocks: campus.blocks, trees: campus.trees, sails: [] });
+  return { ground, backdrop };
+}
+
+export function openCampus(campus: Campus, weather: Weather): Opened {
+  const { ground, backdrop } = prepareCampus(campus, weather);
+  const bare = simulate(ground, weather, backdrop);
+  return { ground, backdrop, bare, peak: hottestMinute(bare, ground) };
 }
 
 export function stepAt(minute: number): { low: number; high: number; share: number } {
