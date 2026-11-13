@@ -1,4 +1,4 @@
-import { boxOf, grow, insideRing, ringArea, segmentDistance, type Box, type Point, type Ring } from './geometry';
+import { boxOf, grow, insideRing, ringArea, ringDistance, segmentDistance, type Box, type Point, type Ring } from './geometry';
 import { ellipseSpans, lineSpans, makeGrid, polygonSpans, type Grid, type Span } from './raster';
 
 export type Surface = 'grass' | 'asphalt' | 'concrete' | 'turf' | 'court' | 'track' | 'soil' | 'water' | 'roof';
@@ -33,11 +33,34 @@ export function surfaceChoices(surface: Surface): Surface[] {
 
 export const SURFACE_ORDER: Surface[] = ['grass', 'asphalt', 'concrete', 'turf', 'court', 'track', 'soil', 'water', 'roof'];
 
-export type Patch = { surface: Surface; ring: Ring; label?: string; guessed?: boolean };
-export type Strip = { surface: Surface; width: number; line: Ring; label?: string };
-export type Block = { id: number; ring: Ring; height: number; guessed: boolean; home: boolean };
-export type Tree = { x: number; y: number; radius: number; height: number; photo?: boolean };
+export type Tone = 'pale' | 'cream' | 'sand' | 'brick' | 'tile' | 'grey' | 'dark' | 'green' | 'blue';
+export type RoofShape = 'gabled' | 'hipped' | 'pyramidal' | 'skillion' | 'dome' | 'flat';
+export type Patch = { surface: Surface; ring: Ring; label?: string; guessed?: boolean; sport?: string };
+export type Strip = { surface: Surface; width: number; line: Ring; label?: string; crossing?: boolean; aisle?: boolean };
+export type Block = {
+  id: number;
+  ring: Ring;
+  height: number;
+  guessed: boolean;
+  home: boolean;
+  min?: number;
+  levels?: number;
+  roof?: RoofShape;
+  rise?: number;
+  across?: boolean;
+  slope?: number;
+  wall?: Tone;
+  top?: Tone;
+  tone?: Tone;
+  stand?: boolean;
+};
+export type Tree = { x: number; y: number; radius: number; height: number; photo?: boolean; needle?: boolean };
 export type Sighting = { source: string; date: string; fields: number[] };
+export type Cover = { id: number; ring: Ring; height: number; home: boolean; solar?: boolean };
+export type EdgeKind = 'fence' | 'wall' | 'hedge';
+export type Edge = { kind: EdgeKind; line: Ring; height: number };
+export type ThingKind = 'flagpole' | 'bench' | 'bikes' | 'lamp' | 'door' | 'main door';
+export type Thing = { kind: ThingKind; x: number; y: number };
 
 export type Campus = {
   name: string;
@@ -50,6 +73,9 @@ export type Campus = {
   blocks: Block[];
   trees: Tree[];
   photo?: Sighting;
+  covers?: Cover[];
+  edges?: Edge[];
+  things?: Thing[];
 };
 
 export type Ground = {
@@ -62,6 +88,19 @@ export type Ground = {
 export function extentOf(campus: Campus, margin = 70): Box {
   const rings = campus.boundary.length > 0 ? campus.boundary : campus.blocks.filter((block) => block.home).map((block) => block.ring);
   return grow(boxOf(rings), margin);
+}
+
+export const FLOATS_ABOVE = 2;
+
+export function floating(block: Block): boolean {
+  return (block.min ?? 0) >= FLOATS_ABOVE;
+}
+
+export function insideCover(campus: Campus, x: number, y: number, gap = 0): boolean {
+  for (const cover of campus.covers ?? []) {
+    if (insideRing(cover.ring, x, y) || (gap > 0 && ringDistance(cover.ring, x, y) < gap)) return true;
+  }
+  return false;
 }
 
 export function atHome(campus: Campus, x: number, y: number): boolean {
@@ -101,12 +140,18 @@ export function rasterize(campus: Campus, cell: number, margin = 70, exact?: Gri
       polygonSpans(grid, patch.ring, paint(surface, SURFACES[patch.surface].code));
     }
   }
-  for (const block of campus.blocks) polygonSpans(grid, block.ring, paint(surface, SURFACES.roof.code));
+  for (const block of campus.blocks) {
+    if (!floating(block)) polygonSpans(grid, block.ring, paint(surface, SURFACES.roof.code));
+  }
   const open = new Uint8Array(size);
   for (let index = 0; index < size; index += 1) {
     if (home[index] && SURFACES[SURFACE_ORDER[surface[index]]].plantable) open[index] = 1;
   }
   for (const ring of campus.clear ?? []) polygonSpans(grid, ring, paint(open, 0));
+  for (const cover of campus.covers ?? []) polygonSpans(grid, cover.ring, paint(open, 0));
+  for (const block of campus.blocks) {
+    if (floating(block)) polygonSpans(grid, block.ring, paint(open, 0));
+  }
   return { grid, surface, home, open };
 }
 

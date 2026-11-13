@@ -141,9 +141,12 @@ describe('map answers', () => {
       { type: 'way', id: 2, tags: { highway: 'service' }, geometry: [{ lat: 2, lon: 2 }, { lat: 3, lon: 3 }] },
       { type: 'way', id: 1, tags: { highway: 'service' }, geometry: [{ lat: -1, lon: 0.5 }, { lat: 2, lon: 0.5 }] },
       { type: 'node', id: 5, tags: { natural: 'tree' }, lat: 0.2, lon: 0.2 },
-      { type: 'node', id: 6, tags: { amenity: 'bench' }, lat: 0.2, lon: 0.2 },
+      { type: 'node', id: 6, tags: { amenity: 'cafe' }, lat: 0.2, lon: 0.2 },
+      { type: 'node', id: 7, tags: { amenity: 'bench' }, lat: 0.3, lon: 0.3 },
+      { type: 'way', id: 8, tags: { barrier: 'fence' }, geometry: [{ lat: 0.5, lon: 0.5 }, { lat: 0.6, lon: 0.6 }] },
+      { type: 'node', id: 10, tags: { barrier: 'fence' }, lat: 0.3, lon: 0.3 },
     ];
-    expect(tidy(elements, box).map((element) => `${element.type}${element.id}`)).toEqual(['node5', 'way1', 'way9']);
+    expect(tidy(elements, box).map((element) => `${element.type}${element.id}`)).toEqual(['node5', 'node7', 'way1', 'way8', 'way9']);
   });
 });
 
