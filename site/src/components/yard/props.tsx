@@ -1,19 +1,20 @@
+import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { atHome, type Campus } from '@/engine/campus';
 import type { Yard } from './controller';
 import { along, axisHeading, bandPads, courts, fields, lightPoles, onRoof, parkingStalls, thin, walkers, type Area } from './layout';
 import { BLOB_LIFT, buildBlob } from './models';
-import type { PropLevel } from './quality';
+import { TIERS, type PropLevel } from './quality';
 
-type Level = PropLevel;
 type Vec = [number, number, number];
 type Placement = { x: number; y: number; heading: number; stretch?: number; color?: THREE.Color };
 type Kind = 'cars' | 'poles' | 'nets' | 'posts' | 'goals' | 'people';
 type Model = { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial };
 
 const CAR_SHARE = 0.52;
-const CAR_CAP: Record<Exclude<Level, 'none'>, number> = { full: 420, light: 150 };
+const CAR_LONG = 4.4;
+const SMALLEST_PIXELS = 3;
 const CAR_JITTER = 0.15;
 const CAR_YAW = 0.035;
 const CAR_BLOB_LONG = 5.2;
@@ -529,7 +530,7 @@ function placePeople(yard: Yard, light: boolean): Placement[] {
   return result;
 }
 
-function instanced(yard: Yard, model: Model, items: Placement[]): THREE.InstancedMesh | null {
+function instanced(yard: Yard, model: Model, items: Placement[], shadows: boolean): THREE.InstancedMesh | null {
   if (items.length === 0) return null;
   const mesh = new THREE.InstancedMesh(model.geometry, model.material, items.length);
   const matrix = new THREE.Matrix4();
@@ -547,7 +548,7 @@ function instanced(yard: Yard, model: Model, items: Placement[]): THREE.Instance
   });
   mesh.instanceMatrix.needsUpdate = true;
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  mesh.castShadow = true;
+  mesh.castShadow = shadows;
   mesh.receiveShadow = true;
   mesh.matrixAutoUpdate = false;
   mesh.computeBoundingSphere();
@@ -571,12 +572,13 @@ function blobs(yard: Yard, blob: ReturnType<typeof buildBlob>, cars: Placement[]
   });
   mesh.instanceMatrix.needsUpdate = true;
   mesh.renderOrder = -1;
+  mesh.name = 'blobs';
   mesh.matrixAutoUpdate = false;
   mesh.computeBoundingSphere();
   return mesh;
 }
 
-export function Props({ yard, level = 'full' }: { yard: Yard; level?: Level }) {
+export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: PropLevel }) {
   const models = useMemo(buildModels, []);
   const blob = useMemo(buildBlob, []);
   useEffect(
@@ -591,21 +593,20 @@ export function Props({ yard, level = 'full' }: { yard: Yard; level?: Level }) {
     [models, blob],
   );
   const meshes = useMemo(() => {
-    if (level === 'none') return [];
-    const light = level === 'light';
+    if (!level) return [];
     const nets = placeNets(yard);
     const placed: Record<Kind, Placement[]> = {
-      cars: placeCars(yard, CAR_CAP[level]),
+      cars: placeCars(yard, level.cars),
       poles: placePoles(yard),
       nets,
       posts: nets,
       goals: placeGoals(yard),
-      people: placePeople(yard, light),
+      people: thin(placePeople(yard, level.light), level.people),
     };
     const shades = blobs(yard, blob, placed.cars);
     return [
       ...KINDS.flatMap((kind) => {
-        const mesh = instanced(yard, models[kind], placed[kind]);
+        const mesh = instanced(yard, models[kind], placed[kind], level.shadows);
         if (mesh && models[kind].material.transparent) mesh.renderOrder = 2;
         return mesh ? [{ kind: kind as string, mesh }] : [];
       }),
@@ -618,9 +619,29 @@ export function Props({ yard, level = 'full' }: { yard: Yard; level?: Level }) {
     },
     [meshes],
   );
-  if (level === 'none') return null;
+  const reach = useMemo(() => {
+    const box = new THREE.Box3();
+    for (const { mesh } of meshes) {
+      if (!mesh.boundingBox) mesh.computeBoundingBox();
+      if (mesh.boundingBox) box.union(mesh.boundingBox);
+    }
+    return { box, shown: true };
+  }, [meshes]);
+  useFrame((state) => {
+    if (meshes.length === 0) return;
+    const camera = state.camera as THREE.PerspectiveCamera;
+    const fov = camera.isPerspectiveCamera ? camera.fov : 30;
+    const zoom = camera.isPerspectiveCamera ? camera.zoom : 1;
+    const distance = Math.max(reach.box.distanceToPoint(camera.position), 1e-3);
+    const pixels = (CAR_LONG * state.gl.domElement.height * zoom) / (2 * Math.tan((fov * Math.PI) / 360) * distance);
+    const shown = pixels >= SMALLEST_PIXELS;
+    if (shown === reach.shown) return;
+    reach.shown = shown;
+    for (const { mesh } of meshes) mesh.visible = shown;
+  });
+  if (!level) return null;
   return (
-    <group>
+    <group name="props">
       {meshes.map(({ kind, mesh }) => (
         <primitive key={kind} object={mesh} raycast={() => null} />
       ))}

@@ -1,18 +1,24 @@
 export type Tier = 'high' | 'medium' | 'low';
-export type PropLevel = 'full' | 'light' | 'none';
+export type PropLevel = { cars: number; people: number; light: boolean; shadows: boolean } | null;
 
 export const TIERS: Record<Tier, { dpr: number; shadow: number; texture: number; props: PropLevel }> = {
-  high: { dpr: 2, shadow: 4096, texture: 2048, props: 'full' },
-  medium: { dpr: 1.5, shadow: 2048, texture: 2048, props: 'light' },
-  low: { dpr: 1, shadow: 1024, texture: 2048, props: 'none' },
+  high: { dpr: 1.5, shadow: 3072, texture: 2048, props: { cars: 300, people: 150, light: false, shadows: true } },
+  medium: { dpr: 1.25, shadow: 2048, texture: 2048, props: { cars: 140, people: 70, light: true, shadows: false } },
+  low: { dpr: 1, shadow: 1024, texture: 2048, props: null },
 };
 
 const ORDER: Tier[] = ['high', 'medium', 'low'];
 const KEY = 'shady.quality';
+const SETTLE_MS = 5000;
 
 export function powerChoice(): 'low-power' | 'high-performance' {
   if (typeof window === 'undefined') return 'high-performance';
   return new URLSearchParams(window.location.search).get('gpu') === 'low' ? 'low-power' : 'high-performance';
+}
+
+export function keepFrame(): boolean {
+  if (typeof window === 'undefined') return false;
+  return !window.matchMedia('(pointer: coarse)').matches;
 }
 
 export function chipName(gl: WebGLRenderingContext | WebGL2RenderingContext | null): string {
@@ -41,7 +47,8 @@ function guess(): Tier {
   } catch {
     chip = '';
   }
-  const weak = /Intel|SwiftShader|Mali-4|Adreno \(TM\) [3-5]|PowerVR/i.test(chip);
+  if (/Intel/i.test(chip)) return 'medium';
+  const weak = /SwiftShader|Mali-4|Adreno \(TM\) [3-5]|PowerVR/i.test(chip);
   if (memory <= 2 || navigator.hardwareConcurrency <= 2) return 'low';
   if (coarse || weak || memory <= 4) return 'medium';
   return 'high';
@@ -51,6 +58,7 @@ class Quality {
   tier: Tier = 'medium';
   chosen = false;
   private ready = false;
+  private changed = 0;
   private listeners = new Set<() => void>();
 
   private start(): void {
@@ -96,9 +104,12 @@ class Quality {
 
   lower(): void {
     if (this.chosen) return;
+    const now = performance.now();
+    if (this.changed > 0 && now - this.changed < SETTLE_MS) return;
     const next = ORDER[Math.min(ORDER.length - 1, ORDER.indexOf(this.tier) + 1)];
     if (next === this.tier) return;
     this.tier = next;
+    this.changed = now;
     for (const listener of this.listeners) listener();
   }
 }
