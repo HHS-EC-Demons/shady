@@ -30,6 +30,10 @@ const RISE_FAST = Float32Array.from(RISE);
 const DEGREES_AT_ZERO = decode(0);
 const DEGREES_PER_STEP = decode(1) - decode(0);
 
+function snap(value: number): number {
+  return Math.round(value * 10) / 10;
+}
+
 export function probeHeight(yard: Yard): number {
   return yard.radius * 0.07;
 }
@@ -317,7 +321,9 @@ export class Yard {
     this.touch(true);
   }
 
-  plant(x: number, y: number): number | null {
+  plant(atX: number, atY: number): number | null {
+    const x = snap(atX);
+    const y = snap(atY);
     if (!this.canPlant(x, y)) return null;
     const id = this.nextId;
     this.nextId += 1;
@@ -328,13 +334,17 @@ export class Yard {
     return id;
   }
 
-  moveTree(id: number, x: number, y: number): void {
+  moveTree(id: number, atX: number, atY: number): void {
+    const x = snap(atX);
+    const y = snap(atY);
     if (!this.canPlant(x, y, id)) return;
     this.trees = this.trees.map((tree) => (tree.id === id ? { ...tree, x, y } : tree));
     this.touch(false);
   }
 
-  startSail(x: number, y: number): number | null {
+  startSail(atX: number, atY: number): number | null {
+    const x = snap(atX);
+    const y = snap(atY);
     if (!atHome(this.campus, x, y)) return null;
     const id = this.nextId;
     this.nextId += 1;
@@ -348,8 +358,8 @@ export class Yard {
     this.sails = this.sails.map((sail) => {
       if (sail.id !== id) return sail;
       const [ax, ay] = sail.corners[0];
-      const bx = ax + clamp(x - ax, -40, 40);
-      const by = ay + clamp(y - ay, -40, 40);
+      const bx = snap(ax + clamp(x - ax, -40, 40));
+      const by = snap(ay + clamp(y - ay, -40, 40));
       return { ...sail, corners: [[ax, ay], [bx, ay], [bx, by], [ax, by]] };
     });
     this.touch(false);
@@ -454,8 +464,8 @@ export class Yard {
     this.years = YEARS.includes(saved.years ?? 0) ? (saved.years as number) : 20;
     const radius = treeRadius(this.years);
     const height = treeHeight(this.years);
-    this.trees = saved.trees.map((tree) => ({ ...tree, radius, height }));
-    this.sails = saved.sails;
+    this.trees = saved.trees.map((tree) => ({ ...tree, x: snap(tree.x), y: snap(tree.y), radius, height }));
+    this.sails = saved.sails.map((sail) => ({ ...sail, corners: sail.corners.map(([x, y]) => [snap(x), snap(y)]) as Sail['corners'] }));
     this.readings = Array.isArray(saved.readings) ? saved.readings : [];
     this.nextId = Math.max(0, ...saved.trees.map((tree) => tree.id), ...saved.sails.map((sail) => sail.id), ...this.readings.map((reading) => reading.id)) + 1;
     this.touch(true);
@@ -519,7 +529,7 @@ export class Yard {
     if (tree) {
       const id = this.nextId;
       this.nextId += 1;
-      this.trees = [...this.trees, { id, ...tree }];
+      this.trees = [...this.trees, { id, ...tree, x: snap(tree.x), y: snap(tree.y) }];
       this.dirty = true;
     }
     this.planting = this.queue.length;
