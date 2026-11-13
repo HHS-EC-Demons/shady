@@ -108,6 +108,19 @@ export class Planner {
         this.open[index] = 1;
       }
     }
+    for (const tree of campus.trees) this.close(tree.x, tree.y, (tree.radius + radius * 0.5) / grid.cell);
+  }
+
+  private close(x: number, y: number, gap: number): void {
+    const grid = this.ground.grid;
+    const col = Math.floor((x - grid.minX) / grid.cell);
+    const row = Math.floor((y - grid.minY) / grid.cell);
+    const reach = Math.ceil(gap);
+    for (let r = Math.max(0, row - reach); r <= Math.min(grid.rows - 1, row + reach); r += 1) {
+      for (let c = Math.max(0, col - reach); c <= Math.min(grid.cols - 1, col + reach); c += 1) {
+        if ((r - row) * (r - row) + (c - col) * (c - col) <= gap * gap) this.open[r * grid.cols + c] = 0;
+      }
+    }
   }
 
   block(trees: Tree[]): void {
@@ -116,14 +129,7 @@ export class Planner {
 
   private claim(tree: Tree): void {
     const grid = this.ground.grid;
-    const gap = Math.ceil((tree.radius + this.radius) * 0.85 / grid.cell);
-    const col = Math.floor((tree.x - grid.minX) / grid.cell);
-    const row = Math.floor((tree.y - grid.minY) / grid.cell);
-    for (let r = Math.max(0, row - gap); r <= Math.min(grid.rows - 1, row + gap); r += 1) {
-      for (let c = Math.max(0, col - gap); c <= Math.min(grid.cols - 1, col + gap); c += 1) {
-        if ((r - row) * (r - row) + (c - col) * (c - col) <= gap * gap) this.open[r * grid.cols + c] = 0;
-      }
-    }
+    this.close(tree.x, tree.y, Math.ceil(((tree.radius + this.radius) * 0.85) / grid.cell));
     const gains = new Float64Array(this.places.length);
     for (const moment of this.moments) {
       const shadow = treeShadow(tree, moment.ray);

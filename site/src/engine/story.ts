@@ -222,8 +222,9 @@ function composeStory(campus: Campus, weather: Weather, count: number, years: nu
   const star = ranked.find((item) => !PATHS.includes(item.place.label)) ?? ranked[0];
   const middle: Point = star ? anchorOf(star.place, ground) : cellCenter(ground.grid, Math.floor((ground.grid.cols * ground.grid.rows) / 2));
 
+  const staged = ranked.some((item) => item.place.label === STAGE);
   const walks = active
-    .filter((item) => item.place.label !== star?.place.label)
+    .filter((item) => item.place.label !== star?.place.label && !(staged && item.place.label === STAGE))
     .map((item) => {
       const anchor = anchorOf(item.place, ground);
       return { item, anchor, shade: nearestShade(ground, bare, peak, anchor, item.place) };
