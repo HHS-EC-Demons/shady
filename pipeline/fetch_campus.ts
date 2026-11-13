@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { enrich } from '../site/src/engine/aerial';
 import { loadCampus, type Found } from '../site/src/engine/osm';
 import { hottestDay, type Weather } from '../site/src/engine/weather';
 
@@ -13,7 +14,13 @@ const school: Found = {
   lon: -96.7545208,
 };
 
-const campus = await loadCampus(school, { 'User-Agent': 'school-shade-project/0.1' });
+const mapped = await loadCampus(school, { 'User-Agent': 'school-shade-project/0.1' });
+const campus = await enrich(mapped, undefined, {
+  wait: 120000,
+  inline: true,
+  onSight: (sight) => console.log(JSON.stringify({ photo: sight.date, bytes: sight.bytes, seconds: sight.seconds, trees: sight.trees.length, fields: sight.fields })),
+});
+if (!campus.photo) throw new Error('The aerial photo step found nothing');
 const here = dirname(fileURLToPath(import.meta.url));
 const out = join(here, '..', 'site', 'public', 'campus');
 mkdirSync(out, { recursive: true });
@@ -38,6 +45,7 @@ console.log(
     blocks: campus.blocks.length,
     home: campus.blocks.filter((block) => block.home).length,
     trees: campus.trees.length,
+    photoTrees: campus.trees.filter((tree) => tree.photo).length,
     day: weather.date,
     zone: weather.zone,
     offset: weather.offset,
