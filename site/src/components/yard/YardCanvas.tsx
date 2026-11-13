@@ -20,7 +20,7 @@ export default function YardCanvas({ yard, layer, tier, drawn, onReady }: Props)
       aria-hidden="true"
     >
       <PerformanceMonitor onDecline={() => quality.lower()} />
-      <Scene yard={yard} layer={layer} shadow={TIERS[tier].shadow} texture={TIERS[tier].texture} props={TIERS[tier].props} onReady={onReady} />
+      <Scene yard={yard} layer={layer} shadow={TIERS[tier].shadow} texture={TIERS[tier].texture} props={TIERS[tier].props} standing={TIERS[tier].standing} onReady={onReady} />
     </Canvas>
   );
 }

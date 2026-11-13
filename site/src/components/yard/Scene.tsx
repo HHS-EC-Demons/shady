@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObj
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
-import type { Block } from '@/engine/campus';
+import { atHome, type Block, type Campus, type Tree } from '@/engine/campus';
 import { CANOPY_FLATTEN, type Sail } from '@/engine/shade';
 import { probeHeight, sunReach, treeHeight, treeRadius, type PlanTree, type Yard } from './controller';
 import { Ground, primeGround } from './ground';
@@ -136,8 +136,8 @@ export function Blocks({ yard }: { yard: Yard }) {
 
 type TreeModel = { crown: THREE.BufferGeometry; trunk: THREE.BufferGeometry };
 
-export function useTree(light = false): TreeModel {
-  const model = useMemo(() => buildTree({ light }), [light]);
+export function useTree(light = false, low = false): TreeModel {
+  const model = useMemo(() => buildTree({ light, low }), [light, low]);
   useEffect(
     () => () => {
       model.crown.dispose();
@@ -180,13 +180,26 @@ function girth(radius: number): number {
   return Math.min(1.2, Math.max(0.45, radius / 4.5));
 }
 
-export function MappedTrees({ yard }: { yard: Yard }) {
-  const model = useTree(true);
+function spotKey(tree: Tree): number {
+  return Math.round(tree.x * 10) * 73856093 + Math.round(tree.y * 10) * 19349663;
+}
+
+export function shownTrees(campus: Campus, most: number): Tree[] {
+  if (campus.trees.length <= most) return campus.trees;
+  return campus.trees
+    .map((tree, order) => ({ tree, order, home: atHome(campus, tree.x, tree.y) }))
+    .sort((a, b) => Number(b.home) - Number(a.home) || b.tree.radius - a.tree.radius || a.order - b.order)
+    .slice(0, most)
+    .map((item) => item.tree);
+}
+
+export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true }: { yard: Yard; most?: number; grounded?: boolean }) {
+  const model = useTree(true, true);
   const blob = useBlob();
   const crowns = useRef<THREE.InstancedMesh>(null);
   const trunks = useRef<THREE.InstancedMesh>(null);
   const blobs = useRef<THREE.InstancedMesh>(null);
-  const trees = yard.campus.trees;
+  const trees = useMemo(() => shownTrees(yard.campus, most), [yard.campus, most]);
   useEffect(() => {
     const matrix = new THREE.Matrix4();
     const turn = new THREE.Quaternion();
@@ -195,10 +208,11 @@ export function MappedTrees({ yard }: { yard: Yard }) {
     trees.forEach((tree, index) => {
       const [x, , z] = yard.toScene(tree.x, tree.y);
       const tall = tree.radius * CANOPY_FLATTEN;
-      turn.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, index * 1.7);
+      const key = spotKey(tree);
+      turn.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, (key % 3600) / 573);
       matrix.compose(new THREE.Vector3(x, tree.height - tall, z), turn, new THREE.Vector3(tree.radius, tall, tree.radius));
       crowns.current?.setMatrixAt(index, matrix);
-      crowns.current?.setColorAt(index, treeTint(index, MAPPED_LIFT, shade));
+      crowns.current?.setColorAt(index, treeTint(key, MAPPED_LIFT, shade));
       const trunk = Math.max(0.5, tree.height - tall);
       const thick = girth(tree.radius);
       matrix.compose(new THREE.Vector3(x, trunk / 2, z), turn, new THREE.Vector3(thick, trunk, thick));
@@ -220,17 +234,17 @@ export function MappedTrees({ yard }: { yard: Yard }) {
       blobs.current.instanceMatrix.needsUpdate = true;
       blobs.current.computeBoundingSphere();
     }
-  }, [trees, yard, model, blob]);
+  }, [trees, yard, model, blob, grounded]);
   if (trees.length === 0) return null;
   return (
     <group name="trees">
       <instancedMesh ref={crowns} args={[model.crown, undefined, trees.length]} castShadow raycast={() => null}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>
-      <instancedMesh ref={trunks} args={[model.trunk, undefined, trees.length]} castShadow raycast={() => null}>
+      <instancedMesh ref={trunks} args={[model.trunk, undefined, trees.length]} raycast={() => null}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>
-      <instancedMesh ref={blobs} name="blobs" args={[blob.geometry, blob.material, trees.length]} renderOrder={-1} raycast={() => null} />
+      {grounded && <instancedMesh ref={blobs} name="blobs" args={[blob.geometry, blob.material, trees.length]} renderOrder={-1} raycast={() => null} />}
     </group>
   );
 }
@@ -654,7 +668,13 @@ function Rig({ yard, reach }: { yard: Yard; reach: number }) {
     [],
   );
 
+  const seen = useRef(yard);
+
   useFrame(() => {
+    if (seen.current !== yard) {
+      seen.current = yard;
+      turn.current = yard.focusTurn;
+    }
     if (controls && fitted.current) {
       const near = view.position.distanceTo(controls.target) / home.current;
       const opacity = Math.min(1, Math.max(0, (near - 0.74) / 0.18));
@@ -732,9 +752,9 @@ export function Pulse({ yard }: { yard: Yard }) {
   return null;
 }
 
-type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel; onReady: () => void };
+type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel; standing?: number; onReady: () => void };
 
-export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS.high.texture, props = TIERS.high.props, onReady }: SceneProps) {
+export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS.high.texture, props = TIERS.high.props, standing = TIERS.high.standing, onReady }: SceneProps) {
   const reach = sunReach(yard);
   return (
     <Stages onReady={onReady}>
@@ -745,7 +765,7 @@ export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS
       <Ground yard={yard} texture={texture} />
       <Prime run={() => primeBlocks(yard)} />
       <Blocks yard={yard} />
-      <MappedTrees yard={yard} />
+      <MappedTrees yard={yard} most={standing} grounded={props !== null && !props.light} />
       <Prime run={() => primeProps(yard, props)} />
       <Props yard={yard} level={props} />
       <Plan yard={yard} />

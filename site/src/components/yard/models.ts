@@ -126,7 +126,7 @@ function crownLobes(shell: number, detail: number, size: number): Lobe[] {
       near: detail <= 1 ? 0.76 : detail === 2 ? 0.86 : 0.92,
     });
   };
-  add(0, -0.02, 0, 0.64, 1);
+  add(0, -0.02, 0, 0.64, Math.min(1, detail));
   for (let index = 0; index < shell; index += 1) {
     const share = (index + 0.5) / shell;
     const lift = 0.9 - share * 1.6;
@@ -141,12 +141,13 @@ function crownLobes(shell: number, detail: number, size: number): Lobe[] {
 
 const LIGHT_SHELL = 11;
 const LIGHT_SIZE = 0.35;
+const LOW_SHELL = 4;
+const LOW_SIZE = 0.48;
 
-const LEAF_DEEP = srgb('#173723');
-const LEAF_MID = srgb('#2f6243');
-const LEAF_SUN = srgb('#52834f');
-const LEAF_WARM = srgb('#3f6a3c');
-const LEAF_COOL = srgb('#2a5e4a');
+type Leaves = { deep: THREE.Color; mid: THREE.Color; sun: THREE.Color; warm: THREE.Color; cool: THREE.Color };
+
+const LEAVES: Leaves = { deep: srgb('#173723'), mid: srgb('#2f6243'), sun: srgb('#52834f'), warm: srgb('#3f6a3c'), cool: srgb('#2a5e4a') };
+const QUIET: Leaves = { deep: srgb('#26342b'), mid: srgb('#4b5f50'), sun: srgb('#76896f'), warm: srgb('#5b6a55'), cool: srgb('#48605a') };
 
 const TINTS = [srgb('#f4f7de'), srgb('#ffffff'), srgb('#e2efe8')];
 
@@ -158,14 +159,16 @@ export function treeTint(key: number, lift = 1, out = new THREE.Color()): THREE.
   return out.copy(TINTS[hash % TINTS.length]).multiplyScalar(lift);
 }
 
-const treeCache = new Map<boolean, { crown: THREE.BufferGeometry; trunk: THREE.BufferGeometry }>();
+type Shape = 'full' | 'light' | 'low';
 
-export function buildTree(options: { light?: boolean } = {}): { crown: THREE.BufferGeometry; trunk: THREE.BufferGeometry } {
-  const light = options.light === true;
-  let cached = treeCache.get(light);
+const treeCache = new Map<string, { crown: THREE.BufferGeometry; trunk: THREE.BufferGeometry }>();
+
+export function buildTree(options: { light?: boolean; low?: boolean } = {}): { crown: THREE.BufferGeometry; trunk: THREE.BufferGeometry } {
+  const shape: Shape = options.low ? 'low' : options.light ? 'light' : 'full';
+  let cached = treeCache.get(shape);
   if (!cached) {
-    cached = { crown: buildCrown(light), trunk: buildTrunk(light) };
-    treeCache.set(light, cached);
+    cached = { crown: buildCrown(shape), trunk: buildTrunk(shape) };
+    treeCache.set(shape, cached);
   }
   return { crown: cached.crown.clone(), trunk: cached.trunk.clone() };
 }
@@ -204,8 +207,9 @@ function blocked(lobes: Lobe[], skip: number, x: number, y: number, z: number, d
   return false;
 }
 
-function buildCrown(light: boolean): THREE.BufferGeometry {
-  const lobes = light ? crownLobes(LIGHT_SHELL, 1, LIGHT_SIZE) : crownLobes(17, 2, 0.29);
+function buildCrown(shape: Shape): THREE.BufferGeometry {
+  const lobes = shape === 'low' ? crownLobes(LOW_SHELL, 0, LOW_SIZE) : shape === 'light' ? crownLobes(LIGHT_SHELL, 1, LIGHT_SIZE) : crownLobes(17, 2, 0.29);
+  const leaves = shape === 'low' ? QUIET : LEAVES;
   const positions: number[] = [];
   const owners: number[] = [];
   const indices: number[] = [];
@@ -318,10 +322,10 @@ function buildCrown(light: boolean): THREE.BufferGeometry {
     let light = 0.06 + 0.62 * open + 0.16 * facing.y + 0.24 * (rise - 0.45);
     light += (0.05 * field(mottle, x, y, z)) / 3;
     light = clamp(light);
-    if (light < 0.5) blend(LEAF_DEEP, LEAF_MID, light / 0.5, tint);
-    else blend(LEAF_MID, LEAF_SUN, (light - 0.5) / 0.5, tint);
+    if (light < 0.5) blend(leaves.deep, leaves.mid, light / 0.5, tint);
+    else blend(leaves.mid, leaves.sun, (light - 0.5) / 0.5, tint);
     const lean = lobes[mine].tone;
-    blend(tint, lean > 0 ? LEAF_WARM : LEAF_COOL, Math.abs(lean) * 0.25 * (0.4 + light), tone);
+    blend(tint, lean > 0 ? leaves.warm : leaves.cool, Math.abs(lean) * 0.25 * (0.4 + light), tone);
     colors[at * 3] = tone.r;
     colors[at * 3 + 1] = tone.g;
     colors[at * 3 + 2] = tone.b;
@@ -427,11 +431,12 @@ const BARK = srgb('#5b4a3a');
 const BARK_DARK = srgb('#463729');
 const BARK_LIGHT = srgb('#6a5743');
 
-function buildTrunk(light: boolean): THREE.BufferGeometry {
+function buildTrunk(shape: Shape): THREE.BufferGeometry {
   const builder = new Builder();
   const random = seeded(4242);
-  const sides = light ? 7 : 10;
-  const steps = light ? [0, 0.03, 0.1, 0.35, 0.65, 1] : [0, 0.012, 0.03, 0.06, 0.11, 0.2, 0.32, 0.45, 0.58, 0.72, 0.86, 1];
+  const light = shape !== 'full';
+  const sides = shape === 'low' ? 5 : light ? 7 : 10;
+  const steps = shape === 'low' ? [0, 1] : light ? [0, 0.03, 0.1, 0.35, 0.65, 1] : [0, 0.012, 0.03, 0.06, 0.11, 0.2, 0.32, 0.45, 0.58, 0.72, 0.86, 1];
   const sway = waves(random, 3, 4, 7, 0.018);
   const grain = random() * Math.PI * 2;
   const shade = new THREE.Color();
@@ -459,7 +464,7 @@ function buildTrunk(light: boolean): THREE.BufferGeometry {
     { from: 0.36, angle: grain + 2.3, lean: 0.72, size: 0.12 },
     { from: 0.44, angle: grain + 4.1, lean: 0.62, size: 0.1 },
   ];
-  for (const limb of light ? limbs.slice(0, 2) : limbs) {
+  for (const limb of shape === 'low' ? [] : light ? limbs.slice(0, 2) : limbs) {
     const start = new THREE.Vector3(field(sway, 0, limb.from * 1.7, 0.3), limb.from - 0.5, field(sway, 0.6, limb.from * 1.7, 0));
     const reach = new THREE.Vector3(Math.cos(limb.angle) * limb.lean, 0.46, Math.sin(limb.angle) * limb.lean);
     const span = reach.y - start.y;
