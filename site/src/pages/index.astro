@@ -31,6 +31,19 @@ const beats = [
 
 <Base title="Shady" description="A 3D heat model of a real school. Scroll through one hot day, then plan the shade yourself." overlay>
   <div class="film" data-mode="still">
+    <script is:inline>
+      (function () {
+        var film = document.querySelector('.film');
+        if (!film || !('WebGL2RenderingContext' in window) || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+        var hidden = false;
+        try {
+          hidden = window.frameElement !== null && window.parent.getComputedStyle(window.frameElement).display === 'none';
+        } catch (error) {
+          hidden = false;
+        }
+        if (!hidden) film.dataset.mode = 'loading';
+      })();
+    </script>
     <div class="film-stage" aria-hidden="true">
       <img class="film-poster" src={`${base}beats/open.jpg`} alt="" width="1600" height="1000" />
       <Film client:only="react" base={base} story={story} />

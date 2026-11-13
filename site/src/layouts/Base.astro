@@ -3,15 +3,18 @@ import { ClientRouter } from 'astro:transitions';
 import '@fontsource-variable/schibsted-grotesk';
 import '@fontsource-variable/azeret-mono';
 import '../styles/global.css';
+import groteskFont from '@fontsource-variable/schibsted-grotesk/files/schibsted-grotesk-latin-wght-normal.woff2?url';
+import monoFont from '@fontsource-variable/azeret-mono/files/azeret-mono-latin-wght-normal.woff2?url';
 
 interface Props {
   title: string;
   description: string;
   current?: string;
   overlay?: boolean;
+  data?: string;
 }
 
-const { title, description, current = '', overlay = false } = Astro.props;
+const { title, description, current = '', overlay = false, data } = Astro.props;
 const raw = import.meta.env.BASE_URL;
 const base = raw.endsWith('/') ? raw : `${raw}/`;
 const links = [
@@ -42,6 +45,9 @@ const address = new URL(Astro.url.pathname, home).href;
     <meta name="twitter:title" content={fullTitle} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={share} />
+    <link rel="preload" href={groteskFont} as="font" type="font/woff2" crossorigin />
+    <link rel="preload" href={monoFont} as="font" type="font/woff2" crossorigin />
+    {data && <link rel="preload" href={data} as="fetch" crossorigin />}
     <link rel="canonical" href={address} />
     <link rel="icon" href={`${base}favicon.svg?v=1`} type="image/svg+xml" />
     <link rel="icon" href={`${base}favicon.png?v=1`} type="image/png" sizes="64x64" />
