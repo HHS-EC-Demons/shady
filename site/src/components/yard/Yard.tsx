@@ -340,7 +340,7 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, aim,
   return (
     <div className="absolute inset-0 grid grid-rows-[minmax(0,1fr)_auto]">
       <div
-        className="relative min-h-0 focus-visible:[outline-offset:-4px]"
+        className="relative min-h-0 focus-visible:after:pointer-events-none focus-visible:after:absolute focus-visible:after:inset-1 focus-visible:after:z-10 focus-visible:after:border-[3px] focus-visible:after:border-leaf"
         tabIndex={0}
         role="application"
         aria-label={`3D model of ${yard.campus.name} coloured by ground temperature. Arrow keys move a pointer north, south, east and west. Enter uses the selected tool at the pointer. Delete removes the nearest tree or sail.`}

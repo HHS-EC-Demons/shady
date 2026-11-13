@@ -398,6 +398,7 @@
   }
 
   .navpill a {
+    position: relative;
     display: flex;
     height: 40px;
     align-items: center;
@@ -408,6 +409,12 @@
     color: var(--oak);
     text-decoration: none;
     transition: background-color 140ms var(--ease);
+  }
+
+  .navpill a::after {
+    content: '';
+    position: absolute;
+    inset: -2px 0;
   }
 
   .navpill a:hover {
