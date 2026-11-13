@@ -138,5 +138,5 @@ export function roofUnits(rings: Flat[]): RoofUnit[] {
 }
 
 export function roofOf(campus: Campus): RoofUnit[] {
-  return roofUnits(campus.blocks.filter((block) => block.home).map((block) => block.ring));
+  return roofUnits(campus.blocks.filter((block) => block.home).map((block) => (block.stand || (block.roof && block.roof !== 'flat') ? [] : block.ring)));
 }

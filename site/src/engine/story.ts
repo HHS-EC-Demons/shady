@@ -1,8 +1,8 @@
 import { SURFACES, rasterize, simCell, type Campus, type Ground, type Tree } from './campus';
 import { planCost } from './cost';
-import { ringDistance, type Point } from './geometry';
+import { insideRing, ringDistance, type Point } from './geometry';
 import { treeHeight, treeRadius } from './growth';
-import { TOUCH_LIMIT, airAt, backdropOf, decode, hottestMinute, simulate, stepAt, type HeatDay } from './heat';
+import { TOUCH_LIMIT, airAt, backdropOf, decode, fixedOf, hottestMinute, simulate, stepAt, type HeatDay } from './heat';
 import { placeDay, placesOf, type Place } from './places';
 import { Planner } from './planner';
 import { cellCenter, polygonSpans } from './raster';
@@ -103,6 +103,7 @@ function sailSpot(campus: Campus, ground: Ground, place: Place, anchor: Point): 
   const roof = SURFACES.roof.code;
   const water = SURFACES.water.code;
   const rings = campus.blocks.filter((block) => block.home).map((block) => block.ring);
+  const covers = (campus.covers ?? []).map((cover) => cover.ring);
   const reach = Math.ceil(SAIL_SEARCH / grid.cell);
   const col0 = Math.floor((anchor[0] - grid.minX) / grid.cell);
   const row0 = Math.floor((anchor[1] - grid.minY) / grid.cell);
@@ -121,7 +122,7 @@ function sailSpot(campus: Campus, ground: Ground, place: Place, anchor: Point): 
   spots.sort((a, b) => a.distance - b.distance);
   for (const spot of spots) {
     const [x, y] = cellCenter(grid, spot.index);
-    if (rings.every((ring) => ringDistance(ring, x, y) >= SAIL_GAP)) return [x, y];
+    if (rings.every((ring) => ringDistance(ring, x, y) >= SAIL_GAP) && covers.every((ring) => !insideRing(ring, x, y) && ringDistance(ring, x, y) >= SAIL_GAP)) return [x, y];
   }
   return anchor;
 }
@@ -210,7 +211,7 @@ export function tellStory(campus: Campus, weather: Weather, count = 30, years = 
 
 function composeStory(campus: Campus, weather: Weather, count: number, years: number): Story {
   const ground = rasterize(campus, simCell(campus));
-  const backdrop = backdropOf(ground, weather, campus.center.lat, campus.center.lon, { blocks: campus.blocks, trees: campus.trees, sails: [] });
+  const backdrop = backdropOf(ground, weather, campus.center.lat, campus.center.lon, fixedOf(campus));
   const bare = simulate(ground, weather, backdrop);
   const peak = hottestMinute(bare, ground);
   const places = placesOf(campus, ground);
