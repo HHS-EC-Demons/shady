@@ -2,6 +2,7 @@ import { MagnifyingGlassIcon } from '@phosphor-icons/react/dist/csr/MagnifyingGl
 import { useRef, useState, useSyncExternalStore } from 'react';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import type { Found } from '@/engine/osm';
+import { begin } from '../yard/loader';
 import { quality, type Tier } from '../yard/quality';
 import { SchoolPicker } from '../yard/SchoolPicker';
 
@@ -10,7 +11,10 @@ export function FindSchool({ base }: { base: string }) {
   const button = useRef<HTMLButtonElement>(null);
   const go = (found: Found | null) => {
     const target = found ? `${base}yard/?school=${encodeURIComponent(JSON.stringify(found))}` : `${base}yard/`;
-    window.location.assign(target);
+    if (found) begin(found);
+    import('astro:transitions/client')
+      .then(({ navigate }) => navigate(target))
+      .catch(() => window.location.assign(target));
   };
   return (
     <>

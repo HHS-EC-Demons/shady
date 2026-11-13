@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type RefObject } from 'react';
+import { Button } from '@/components/ui/button';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { findSchools, type Found } from '@/engine/osm';
+import { findPlaces, type Found } from '@/engine/osm';
 
 type Props = {
   open: boolean;
@@ -10,10 +11,11 @@ type Props = {
   home: string;
   status: string;
   note: string;
+  onRetry?: () => void;
   returnTo: RefObject<HTMLButtonElement | null>;
 };
 
-export function SchoolPicker({ open, onOpenChange, onPick, home, status, note, returnTo }: Props) {
+export function SchoolPicker({ open, onOpenChange, onPick, home, status, note, onRetry, returnTo }: Props) {
   const [text, setText] = useState('');
   const [found, setFound] = useState<Found[]>([]);
   const [searching, setSearching] = useState(false);
@@ -33,7 +35,7 @@ export function SchoolPicker({ open, onOpenChange, onPick, home, status, note, r
     setFailed(false);
     const stop = new AbortController();
     const wait = window.setTimeout(() => {
-      findSchools(query, stop.signal)
+      findPlaces(query, stop.signal)
         .then((list) => {
           if (turn.current !== mine) return;
           setFound(list);
@@ -68,11 +70,18 @@ export function SchoolPicker({ open, onOpenChange, onPick, home, status, note, r
           <DialogDescription>Search for any school to load its campus</DialogDescription>
         </DialogHeader>
         <Command shouldFilter={false} className="bg-raised">
-          <CommandInput value={text} onValueChange={setText} placeholder="Find a school" disabled={status !== ''} className="h-12 text-base placeholder:text-soft" />
+          <CommandInput value={text} onValueChange={setText} placeholder="School or address" disabled={status !== ''} className="h-12 text-base placeholder:text-soft" />
           {(status !== '' || note !== '') && (
-            <p role="status" className="border-b border-rule px-4 py-3 text-base font-medium">
-              {status !== '' ? status : note}
-            </p>
+            <div className="flex min-h-[3.25rem] items-center justify-between gap-3 border-b border-rule px-4 py-1.5">
+              <p role="status" className="py-1.5 text-base font-medium">
+                {status !== '' ? status : note}
+              </p>
+              {status === '' && onRetry && (
+                <Button size="lg" className="h-11 shrink-0 rounded-full px-5 text-base" onClick={onRetry}>
+                  Try again
+                </Button>
+              )}
+            </div>
           )}
           <CommandList className="max-h-[340px]">
             {status === '' && note === '' && <CommandEmpty className="py-6 text-center text-base text-soft">{empty}</CommandEmpty>}

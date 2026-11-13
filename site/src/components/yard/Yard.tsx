@@ -1,5 +1,6 @@
 import { ArrowCounterClockwiseIcon } from '@phosphor-icons/react/dist/csr/ArrowCounterClockwise';
 import { ArrowsOutIcon } from '@phosphor-icons/react/dist/csr/ArrowsOut';
+import { CalendarBlankIcon } from '@phosphor-icons/react/dist/csr/CalendarBlank';
 import { MagnifyingGlassIcon } from '@phosphor-icons/react/dist/csr/MagnifyingGlass';
 import { PlantIcon } from '@phosphor-icons/react/dist/csr/Plant';
 import { ThermometerIcon } from '@phosphor-icons/react/dist/csr/Thermometer';
@@ -10,25 +11,30 @@ import { animate, useReducedMotion } from 'motion/react';
 import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Slider } from '@/components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
 import { SURFACES, surfaceChoices, type Campus, type Surface } from '@/engine/campus';
 import { centerOf } from '@/engine/geometry';
 import { DAY_END, DAY_START, RAMP, TOUCH_LIMIT } from '@/engine/heat';
-import { loadCampus, type Found } from '@/engine/osm';
+import type { Found } from '@/engine/osm';
 import { warmUp } from '@/engine/remote';
 import { decodePlan } from '@/engine/share';
 import { clockLabel } from '@/engine/sun';
-import { hottestDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
+import { FIRST_DAY, dayWeather, lastDay, localDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
 import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Saved, type Tool } from './controller';
+import { Unmapped, carry, placeBundle, type Stage } from './loader';
 import { quality } from './quality';
+import { rememberFixes } from './recall';
 import { SchoolPicker } from './SchoolPicker';
 import { OpenShared } from './ShareDialogs';
 import { adopt, clashes, dropHash, sharedBundle, sharedText, watchHash } from './shared';
-import { editHeight, editSurface, keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
+import { editHeight, editSurface, fixesOf, keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
 
 const YardCanvas = lazy(() => import('./YardCanvas'));
+const loadCalendar = () => import('@/components/ui/calendar');
+const Calendar = lazy(() => loadCalendar().then((module) => ({ default: module.Calendar })));
 
 type Kept = { key: string; bundle: Bundle; weather: Weather; yard: Yard };
 
@@ -69,17 +75,113 @@ function Legend() {
   );
 }
 
-type Day = 'hottest' | 'today';
+type Day = 'hottest' | 'today' | 'pick';
+
+function dateOf(text: string): Date {
+  const [year, month, day] = text.split('-').map(Number);
+  return new Date(year, month - 1, day);
+}
+
+function dayOf(bundle: Bundle): Day {
+  return bundle.hottest && bundle.hottest.date !== bundle.weather.date ? 'pick' : 'hottest';
+}
+
+type DayChoiceProps = { day: Day; picked: string; onDay: (day: Day, date?: string) => void; refocus: RefObject<boolean> };
+
+function DayChoice({ day, picked, onDay, refocus }: DayChoiceProps) {
+  const [open, setOpen] = useState(false);
+  const opener = useRef<HTMLButtonElement>(null);
+  const group = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!refocus.current) return;
+    refocus.current = false;
+    group.current?.querySelector<HTMLButtonElement>('[aria-checked="true"]')?.focus();
+  }, [refocus]);
+  const today = localDay();
+  const first = dateOf(FIRST_DAY);
+  const last = dateOf(lastDay(today));
+  const chosen = day === 'pick' ? dateOf(picked) : undefined;
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverAnchor asChild>
+        <ToggleGroup
+          ref={group}
+          type="single"
+          variant="outline"
+          size="lg"
+          spacing={0}
+          value={day}
+          onValueChange={(value) => {
+            if (value === 'hottest' || value === 'today') onDay(value);
+          }}
+          aria-label="Day to model"
+          className="absolute right-[var(--gutter)] top-[4.5rem] bg-raised"
+        >
+          <ToggleGroupItem value="hottest" className="h-11 px-3.5 text-[0.9375rem]">
+            Hottest day
+          </ToggleGroupItem>
+          <ToggleGroupItem value="today" className="h-11 px-3.5 text-[0.9375rem]">
+            Today
+          </ToggleGroupItem>
+          <ToggleGroupItem
+            ref={opener}
+            value="pick"
+            className="h-11 gap-2 px-3.5 text-[0.9375rem]"
+            onPointerEnter={() => void loadCalendar()}
+            onFocus={() => void loadCalendar()}
+            onClick={() => setOpen((shown) => !shown)}
+          >
+            <CalendarBlankIcon aria-hidden="true" />
+            {day === 'pick' ? dayLabel(picked) : 'Pick a day'}
+          </ToggleGroupItem>
+        </ToggleGroup>
+      </PopoverAnchor>
+      <PopoverContent
+        align="end"
+        className="w-auto bg-raised p-2"
+        aria-label="Pick a day"
+        onInteractOutside={(event) => {
+          if (opener.current?.contains(event.target as Node)) event.preventDefault();
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          opener.current?.focus();
+        }}
+      >
+        <Suspense fallback={<div className="h-[22rem] w-[19rem]" />}>
+          <Calendar
+            mode="single"
+            required
+            selected={chosen}
+            defaultMonth={chosen ?? dateOf(today)}
+            startMonth={first}
+            endMonth={last}
+            disabled={[{ before: first }, { after: last }]}
+            captionLayout="dropdown"
+            autoFocus
+            onSelect={(date) => {
+              if (!date) return;
+              setOpen(false);
+              onDay('pick', localDay(date.getTime()));
+            }}
+            className="bg-transparent [--cell-size:--spacing(10)]"
+          />
+        </Suspense>
+      </PopoverContent>
+    </Popover>
+  );
+}
 
 type LoadedProps = {
   yard: Yard;
   onFind: () => void;
   day: Day;
-  onDay: (day: Day) => void;
+  onDay: (day: Day, date?: string) => void;
   onEdit: (patch: number, surface: Surface) => void;
   onRaise: (block: number, height: number) => void;
   finder: RefObject<HTMLButtonElement | null>;
   first: RefObject<boolean>;
+  refocus: RefObject<boolean>;
 };
 
 function Roof({ yard, index, onRaise }: { yard: Yard; index: number; onRaise: (block: number, height: number) => void }) {
@@ -106,7 +208,7 @@ function Roof({ yard, index, onRaise }: { yard: Yard; index: number; onRaise: (b
   );
 }
 
-function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first }: LoadedProps) {
+function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, refocus }: LoadedProps) {
   const [typed, setTyped] = useState('');
   const [said, setSaid] = useState('');
   const tier = useSyncExternalStore(quality.subscribe, quality.snapshot, quality.server);
@@ -324,23 +426,7 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first }: Lo
             </div>
           )}
         </div>
-        <ToggleGroup
-          type="single"
-          variant="outline"
-          size="lg"
-          spacing={0}
-          value={day}
-          onValueChange={(value) => value && onDay(value as Day)}
-          aria-label="Day to model"
-          className="absolute right-[var(--gutter)] top-[4.5rem] bg-raised"
-        >
-          <ToggleGroupItem value="hottest" className="h-11 px-3.5 text-[0.9375rem]">
-            Hottest day
-          </ToggleGroupItem>
-          <ToggleGroupItem value="today" className="h-11 px-3.5 text-[0.9375rem]">
-            Today
-          </ToggleGroupItem>
-        </ToggleGroup>
+        <DayChoice day={day} picked={yard.weather.date} onDay={onDay} refocus={refocus} />
         <div className="absolute bottom-6 left-[var(--gutter)] flex items-center gap-2.5">
           {yard.focus !== null && (
             <Button variant="outline" size="icon-lg" className="size-11 bg-raised" aria-label="Show the whole campus" onClick={() => yard.lookAt(null)}>
@@ -461,26 +547,44 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first }: Lo
   );
 }
 
+function readFound(text: string | null): Found | null {
+  if (!text) return null;
+  try {
+    const found = JSON.parse(text) as Found;
+    return typeof found.id === 'number' && typeof found.name === 'string' && Number.isFinite(found.lat) && Number.isFinite(found.lon) ? found : null;
+  } catch {
+    return null;
+  }
+}
+
+function sayStage(stage: Stage, name: string): string {
+  return stage === 'weather' ? 'Loading its hottest day of the year' : `Loading the map of ${name}`;
+}
+
 export default function YardStage({ base }: { base: string }) {
   const [yard, setYard] = useState<Yard | null>(null);
   const [failed, setFailed] = useState(false);
   const [picking, setPicking] = useState(false);
   const [status, setStatus] = useState('');
   const [note, setNote] = useState('');
+  const [retry, setRetry] = useState<(() => void) | null>(null);
   const [day, setDay] = useState<Day>('hottest');
   const [asking, setAsking] = useState<((take: boolean) => void) | null>(null);
   const bundle = useRef<Bundle | null>(null);
+  const fallback = useRef<Promise<Bundle> | null>(null);
+  const showing = useRef(false);
   const finder = useRef<HTMLButtonElement>(null);
   const home = useRef('Heritage High School');
 
   const first = useRef(true);
+  const refocus = useRef(false);
   const turns = useRef(0);
 
-  const show = async (next: Bundle, live?: Weather, minute?: number, raising?: number, saved?: Saved): Promise<void> => {
+  const show = async (next: Bundle, override?: Weather, minute?: number, raising?: number, saved?: Saved): Promise<void> => {
     turns.current += 1;
     const turn = turns.current;
     bundle.current = next;
-    const weather = live ?? next.weather;
+    const weather = override ?? next.weather;
     const key = keyOf(next.campus, weather);
     const same = kept !== null && kept.key === key && kept.bundle.campus === next.campus && kept.weather === weather ? kept : null;
     let built: Yard;
@@ -502,85 +606,65 @@ export default function YardStage({ base }: { base: string }) {
     if (turn !== turns.current) return;
     if (raising !== undefined) built.pickBlock(raising);
     if (minute !== undefined) built.setMinute(minute);
-    else if (live) built.setMinute(minuteNow(live));
+    else if (override?.live) built.setMinute(minuteNow(override));
     if (import.meta.env.DEV) (window as unknown as { yard: Yard }).yard = built;
+    showing.current = true;
     setYard(built);
     if (previous && previous !== built) previous.close();
   };
 
-  useEffect(() => {
-    let live = true;
-    warmUp();
-    const shared = sharedText();
-    const asked = shared === null ? new URLSearchParams(window.location.search).get('school') : null;
-    const ready = kept && kept.weather === kept.bundle.weather ? Promise.resolve(kept.bundle) : loadBundle(base);
-    ready
+  const showFallback = () => {
+    if (showing.current || !fallback.current) return;
+    fallback.current
       .then((file) => {
-        if (!live) return;
-        void show(file);
-        if (shared !== null) {
-          void openShared(shared);
-          return;
-        }
-        if (!asked) return;
-        window.history.replaceState(null, '', window.location.pathname);
-        try {
-          const found = JSON.parse(asked) as Found;
-          if (typeof found.id === 'number' && typeof found.name === 'string') {
-            setPicking(true);
-            void pick(found);
-          }
-        } catch {
-          setPicking(false);
-        }
+        if (showing.current) return;
+        setDay(dayOf(file));
+        return show(file);
       })
-      .catch(() => live && setFailed(true));
-    const unwatch = watchHash();
-    return () => {
-      live = false;
-      unwatch();
-    };
-  }, [base]);
+      .catch(() => setFailed(true));
+  };
 
-  useEffect(() => {
-    if (!yard) return;
-    let seen = yard.heat;
-    return yard.subscribe(() => {
-      if (yard.busy || yard.planting > 0 || seen === yard.heat) return;
-      seen = yard.heat;
-      keepPlan(yard);
-    });
-  }, [yard]);
+  const refresh = (found: Found, campus: Campus) => {
+    const current = bundle.current;
+    const shown = kept ? kept.yard : null;
+    if (!current || !shown || !current.school || current.school.kind !== found.kind || current.school.id !== found.id) return;
+    const next = carry(current, campus);
+    keepSchool(next);
+    void show(next, shown.weather !== next.weather ? shown.weather : undefined, shown.minute, undefined, shown.saved());
+  };
 
   const pick = async (found: Found | null) => {
     setNote('');
+    setRetry(null);
     try {
       let next: Bundle;
+      let late: Promise<Campus | null> | null = null;
       if (found === null) {
         keepSchool(null);
         setStatus('Loading the campus');
         next = await loadBundle(base);
       } else {
-        setStatus(`Loading the map of ${found.name}`);
-        const campus = await loadCampus(found);
-        if (campus.blocks.filter((block) => block.home).length + campus.patches.length === 0) {
-          setStatus('');
-          setNote('That school has no mapped buildings yet');
-          return;
-        }
-        setStatus('Loading its hottest day of the year');
-        const weather = await hottestDay(campus.center.lat, campus.center.lon);
-        next = { campus, weather, school: found };
+        setStatus(sayStage('map', found.name));
+        const arrival = await placeBundle(found, (stage) => setStatus(sayStage(stage, found.name)));
+        next = arrival.bundle;
+        late = arrival.late;
         keepSchool(next);
       }
       setStatus('Heating the ground');
       await new Promise((resolve) => window.setTimeout(resolve, 40));
-      setDay('hottest');
+      setDay(dayOf(next));
       first.current = true;
       await show(next);
       setPicking(false);
-    } catch {
-      setNote('The map did not load. Try again.');
+      if (late && found) void late.then((campus) => campus && refresh(found, campus));
+    } catch (error) {
+      if (error instanceof Unmapped) {
+        setNote('That school has no mapped buildings yet');
+      } else {
+        setNote('The map did not load');
+        setRetry(() => () => void pick(found));
+      }
+      showFallback();
     } finally {
       setStatus('');
     }
@@ -595,6 +679,7 @@ export default function YardStage({ base }: { base: string }) {
       return;
     }
     setNote('');
+    setRetry(null);
     if (plan.school) setPicking(true);
     try {
       const next = await sharedBundle(plan, base, setStatus);
@@ -618,23 +703,73 @@ export default function YardStage({ base }: { base: string }) {
       dropHash();
       setStatus('Heating the ground');
       await new Promise((resolve) => window.setTimeout(resolve, 40));
-      setDay('hottest');
+      setDay(dayOf(next));
       first.current = true;
       await show(next, undefined, undefined, undefined, saved);
       setPicking(false);
     } catch {
       setPicking(true);
-      setNote('The map did not load. Try again.');
+      setNote('The map did not load');
+      setRetry(() => () => void openShared(text));
     } finally {
       setStatus('');
     }
+  };
+
+  useEffect(() => {
+    let live = true;
+    warmUp();
+    const shared = sharedText();
+    const found = shared === null ? readFound(new URLSearchParams(window.location.search).get('school')) : null;
+    if (shared === null && new URLSearchParams(window.location.search).has('school')) window.history.replaceState(window.history.state, '', window.location.pathname);
+    const ready = kept && kept.weather === kept.bundle.weather ? Promise.resolve(kept.bundle) : loadBundle(base);
+    fallback.current = ready;
+    if (found) {
+      setPicking(true);
+      void import('./YardCanvas');
+      void pick(found);
+    }
+    ready
+      .then((file) => {
+        if (!live) return;
+        if (shared !== null) {
+          setDay(dayOf(file));
+          void show(file);
+          void openShared(shared);
+          return;
+        }
+        if (found) return;
+        setDay(dayOf(file));
+        void show(file);
+      })
+      .catch(() => live && !found && setFailed(true));
+    const unwatch = watchHash();
+    return () => {
+      live = false;
+      unwatch();
+    };
+  }, [base]);
+
+  useEffect(() => {
+    if (!yard) return;
+    let seen = yard.heat;
+    return yard.subscribe(() => {
+      if (yard.busy || yard.planting > 0 || seen === yard.heat) return;
+      seen = yard.heat;
+      keepPlan(yard);
+    });
+  }, [yard]);
+
+  const keepFixes = (next: Bundle) => {
+    keepSchool(next);
+    if (next.school) void rememberFixes(next.school, fixesOf(next));
   };
 
   const edit = (patch: number, surface: Surface) => {
     const current = bundle.current;
     if (!current || !yard) return;
     const next = editSurface(current, patch, surface);
-    keepSchool(next);
+    keepFixes(next);
     void show(next, yard.weather.live ? yard.weather : undefined, yard.minute);
   };
 
@@ -642,33 +777,81 @@ export default function YardStage({ base }: { base: string }) {
     const current = bundle.current;
     if (!current || !yard) return;
     const next = editHeight(current, block, height);
-    keepSchool(next);
+    keepFixes(next);
     void show(next, yard.weather.live ? yard.weather : undefined, yard.minute, block);
   };
 
-  const change = async (wanted: Day) => {
+  const change = async (wanted: Day, date?: string) => {
     const current = bundle.current;
-    if (!current || wanted === day) return;
-    if (wanted === 'hottest') {
+    if (!current) return;
+    const hottest = current.hottest ?? current.weather;
+    const plain: Bundle = current.hottest ? { ...current, weather: hottest, hottest: undefined } : current;
+    const settle = () => {
+      if (plain !== current) keepSchool(plain);
+    };
+    const target = wanted === 'pick' && date === hottest.date ? 'hottest' : wanted;
+    if (target === 'hottest') {
+      if (day === 'hottest') return;
+      settle();
+      refocus.current = true;
       setDay('hottest');
-      void show(current);
+      void show(plain);
       return;
     }
+    const { lat, lon } = current.campus.center;
+    if (target === 'today') {
+      if (day === 'today') return;
+      try {
+        const live = await todayWeather(lat, lon);
+        if (bundle.current !== current) return;
+        settle();
+        refocus.current = true;
+        setDay('today');
+        void show(plain, live);
+      } catch {
+        return;
+      }
+      return;
+    }
+    if (!date || (day === 'pick' && date === current.weather.date)) return;
     try {
-      const live = await todayWeather(current.campus.center.lat, current.campus.center.lon);
-      setDay('today');
-      void show(current, live);
+      const weather = await dayWeather(lat, lon, date, localDay());
+      if (bundle.current !== current) return;
+      const next: Bundle = { ...current, weather, hottest };
+      keepSchool(next);
+      refocus.current = true;
+      setDay('pick');
+      void show(next);
     } catch {
-      setDay('hottest');
+      return;
     }
   };
 
   if (failed) return <p className="shell absolute inset-x-0 top-1/2 text-center text-lg">The campus did not load. Reload the page.</p>;
-  if (!yard) return <Skeleton className="absolute inset-0 rounded-none bg-muted" />;
+  const picker = (
+    <SchoolPicker
+      open={picking}
+      onOpenChange={(open) => status === '' && setPicking(open)}
+      onPick={pick}
+      home={home.current}
+      status={status}
+      note={note}
+      onRetry={retry ?? undefined}
+      returnTo={finder}
+    />
+  );
+  if (!yard) {
+    return (
+      <>
+        <Skeleton className="absolute inset-0 rounded-none bg-muted" />
+        {picker}
+      </>
+    );
+  }
   return (
     <>
-      <Loaded key={`${yard.campus.name} ${yard.campus.center.lat} ${yard.weather.date}`} yard={yard} onFind={() => setPicking(true)} day={day} onDay={change} onEdit={edit} onRaise={raise} finder={finder} first={first} />
-      <SchoolPicker open={picking} onOpenChange={(open) => status === '' && setPicking(open)} onPick={pick} home={home.current} status={status} note={note} returnTo={finder} />
+      <Loaded key={`${yard.campus.name} ${yard.campus.center.lat} ${yard.weather.date}`} yard={yard} onFind={() => setPicking(true)} day={day} onDay={change} onEdit={edit} onRaise={raise} finder={finder} first={first} refocus={refocus} />
+      {picker}
       <OpenShared
         open={asking !== null}
         onChoose={(take) => {

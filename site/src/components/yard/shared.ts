@@ -1,11 +1,9 @@
-import { surfaceChoices } from '@/engine/campus';
-import { loadCampus, type Found } from '@/engine/osm';
-import { HASH, LIMITS, type HeightFix, type Plan, type SurfaceFix } from '@/engine/share';
-import { hottestDay } from '@/engine/weather';
+import type { Found } from '@/engine/osm';
+import { HASH, LIMITS, type Plan } from '@/engine/share';
+import { dayWeather, localDay } from '@/engine/weather';
 import { treeHeight, treeRadius, type Saved, type Yard } from './controller';
-import { editHeight, editSurface, homeBundle, keepSaved, keepSchool, keptSchool, planKey, storedPlan, type Bundle } from './store';
-
-const FEET = 3.28084;
+import { placeBundle, Unmapped, type Arrival, type Stage } from './loader';
+import { applyFixes, fixesOf, homeBundle, keepSaved, keepSchool, keptSchool, planKey, storedPlan, type Bundle, type Fixes } from './store';
 
 export function sharedText(): string | null {
   const hash = window.location.hash;
@@ -24,30 +22,7 @@ export function watchHash(): () => void {
   return () => window.removeEventListener('hashchange', changed);
 }
 
-type Fixes = { surfaces: SurfaceFix[]; heights: HeightFix[] };
-
-export function fixesOf(bundle: Bundle): Fixes {
-  const { campus, was = {} } = bundle;
-  const surfaces: SurfaceFix[] = [];
-  for (const key of Object.keys(was.patches ?? {})) {
-    const index = Number(key);
-    const from = was.patches?.[key];
-    const patch = campus.patches[index];
-    if (from && patch && patch.surface !== from) surfaces.push({ patch: index, from, to: patch.surface });
-  }
-  const heights: HeightFix[] = [];
-  for (const key of Object.keys(was.blocks ?? {})) {
-    const index = Number(key);
-    const block = campus.blocks[index];
-    if (!block || !Number.isSafeInteger(block.id) || block.id < 1) continue;
-    let nth = 0;
-    for (let other = 0; other < index; other += 1) if (campus.blocks[other].id === block.id) nth += 1;
-    heights.push({ building: block.id, nth, feet: Math.min(2000, Math.max(1, Math.round(block.height * FEET))) });
-  }
-  surfaces.sort((a, b) => a.patch - b.patch);
-  heights.sort((a, b) => a.building - b.building || a.nth - b.nth);
-  return { surfaces, heights };
-}
+export { fixesOf };
 
 export function planOf(bundle: Bundle, yard: Yard): Plan | null {
   if (bundle.school === undefined) return null;
@@ -65,38 +40,34 @@ export function planOf(bundle: Bundle, yard: Yard): Plan | null {
   };
 }
 
+function dayText(stage: Stage, name: string): string {
+  return stage === 'weather' ? 'Loading its hottest day of the year' : `Loading the map of ${name}`;
+}
+
 export async function sharedBundle(plan: Plan, base: string, say: (text: string) => void): Promise<Bundle | null> {
   let bundle: Bundle;
+  const today = localDay();
   if (plan.school === null) {
     const home = await homeBundle(base);
     const { lat, lon } = home.campus.center;
-    const weather = home.weather.date === plan.date ? home.weather : await hottestDay(lat, lon, Date.now(), plan.date);
-    bundle = { ...home, weather };
+    const day = home.weather.date === plan.date ? null : await dayWeather(lat, lon, plan.date, today).catch(() => null);
+    bundle = day ? { ...home, weather: day, hottest: home.weather } : home;
   } else {
     const found: Found = { ...plan.school, place: '' };
     say(`Loading the map of ${found.name}`);
-    const campus = await loadCampus(found);
-    if (campus.blocks.filter((block) => block.home).length + campus.patches.length === 0) return null;
-    say('Loading its hottest day of the year');
-    const weather = await hottestDay(campus.center.lat, campus.center.lon, Date.now(), plan.date);
-    bundle = { campus, weather, school: found };
-  }
-  for (const fix of plan.surfaces) {
-    const patch = bundle.campus.patches[fix.patch];
-    if (patch && patch.surface === fix.from && surfaceChoices(fix.from).includes(fix.to)) bundle = editSurface(bundle, fix.patch, fix.to);
-  }
-  for (const fix of plan.heights) {
-    let seen = 0;
-    for (let index = 0; index < bundle.campus.blocks.length; index += 1) {
-      if (bundle.campus.blocks[index].id !== fix.building) continue;
-      if (seen === fix.nth) {
-        bundle = editHeight(bundle, index, fix.feet / FEET);
-        break;
-      }
-      seen += 1;
+    let arrival: Arrival;
+    try {
+      arrival = await placeBundle(found, (stage) => say(dayText(stage, found.name)));
+    } catch (error) {
+      if (error instanceof Unmapped) return null;
+      throw error;
     }
+    const hottest = arrival.bundle.weather;
+    const campus = arrival.pristine;
+    const day = hottest.date === plan.date ? null : await dayWeather(campus.center.lat, campus.center.lon, plan.date, today).catch(() => null);
+    bundle = day ? { campus, weather: day, school: found, hottest } : { campus, weather: hottest, school: found };
   }
-  return bundle;
+  return applyFixes(bundle, { surfaces: plan.surfaces, heights: plan.heights });
 }
 
 function near(a: number, b: number): boolean {
