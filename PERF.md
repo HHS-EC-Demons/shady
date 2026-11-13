@@ -188,3 +188,72 @@ The heat model now runs in a module Web Worker that calls the same engine functi
 - A cold network. All load numbers are from a local server.
 - Safari and Firefox.
 - The Yard page under the same scroll test. It uses the same stencil and kept buffer path as the film, checked by eye on close ups and not timed.
+
+## District
+
+The District page models up to 48 schools of one city or district on the same hottest day and shows them as clay tiles on one canvas, hottest first, with an ordered list under it. Everything below was measured on 2026-11-13 against the production build on `astro preview` in headless Chrome at 1440 by 900. Other builds kept the one minute load between 5 and 160 for the whole session and it never stayed under 4 for ten minutes, so every row names the load it ran at.
+
+### Three places from a cold cache
+
+Overpass reset every connection from this machine all session, so schools were listed through the Photon fallback and campuses came from the OpenStreetMap API. Seconds count from picking the place in the search list. The photo step reads the full aerial photo for the 12 hottest US schools after every tile has filled.
+
+| Place | Schools found | Shown | First tile | All tiles | Photo step done | Failed schools | Load at start and end |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Frisco, Texas | 78 | 48 | 2.3 s | 25.0 s | 63.5 s | 0 | 29 and 15 |
+| Tempe, Arizona | 42 | 42 | 2.5 s | 23.3 s | 45.3 s | 0 | 15 and 13 |
+| Kelowna, British Columbia | 25 | 25 | 2.2 s | 13.2 s | no photo outside the US | 0 | 13 and 12 |
+
+| Host | Frisco | Tempe | Kelowna |
+| --- | --- | --- | --- |
+| overpass-api.de | 5 requests, all reset | 5, all reset | 5, all reset |
+| photon.komoot.io | 3 requests, 10 KB | 3, 6 KB | 3, 5 KB |
+| archive-api.open-meteo.com | 2 requests, 4 KB | 2, 4 KB | 2, 4 KB |
+| api.openstreetmap.org | 96 requests, 1.0 MB | 84, 1.4 MB | 50, 0.4 MB |
+| planetarycomputer.microsoft.com | 12 requests, 0.3 MB | 12, 0.3 MB | none |
+| naipeuwest.blob.core.windows.net | 159 requests, 26.4 MB | 105, 15.5 MB | none |
+| All outside hosts | 27.7 MB | 17.2 MB | 0.44 MB |
+
+The page itself added 0.29 MB. At most 2 schools are in flight, and inside the district worker every request waits for the one before it on the same host, so no host ever had two requests open at once in these runs. The weather service was asked once per place. Reopening each place from its link read everything from the browser and filled every tile in 0.3 s with no request to any map, weather or photo host. Summaries and campuses are kept for 30 days.
+
+### Photo step
+
+Reading a coarser overview of the same photo was tried first on five schools. The 2.4 m overview agreed with the full read within 0.8 points on four of them but still took 0.9 to 1.7 MB a school, about 60 MB for 48 schools, because the photo is stored in 512 pixel tiles that must be read whole. The 4.8 m overview cost about 1 MB a school and missed by 2.6 points at Roosevelt High School. The fifth school, Tempe High School, gave no photo with either read. So the page models every school from map data first and then reads the full photo for the 12 hottest schools in the background, never on a connection that reports data saving or a 2g or 3g type. That cost 26.7 MB in Frisco and 15.8 MB in Tempe. A school that already has photo trees in the yard's own cache is modelled from that campus.
+
+### Hand over to the yard and agreement
+
+| School | Photo trees on the tile | Tile | Yard at the same hour | Seconds until the yard showed the name |
+| --- | --- | --- | --- | --- |
+| William and Abbie Allen Elementary | yes | 51% at 2.30 pm | 51% | 0.6 |
+| Lebanon Trail High School | yes | 36% at 2 pm and 6% at 10 am | 36% and 6% | 3.2 |
+| Otis Spears Elementary | yes | 25% at 2 pm | 25% | 0.7 |
+| Billy Gene Phillips Elementary | no | 20% at 2 pm | 19% | 1.3 |
+| Bessie Gunstream Elementary | no | 12% at 2 pm | 11% | 1.6 |
+
+Tiles with photo trees match the yard exactly. The two map only tiles are one point higher because the yard reads the photo after it opens. Going back to the District page picks up that photo campus from the yard's cache and the tile then read 19%.
+
+### Budget and frame rate
+
+Scrubbing the time slider back and forth across the whole day on Frisco with 48 tiles.
+
+| Screen | Chip | Frames | Average | 1% low | Worst frame | Frames over 20 ms | Draw calls | Triangles |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1920 by 1080 with `gpu=low` | Intel | 683 | 60 fps | 60 fps | 17 ms | 0 | 7 | 76k |
+| 1440 by 900 at 2x with `gpu=low` | Intel | 582 | 60 fps | 60 fps | 50 ms | 1 | 7 | 76k |
+| 1920 by 1080 | Radeon | 481 | 60 fps | 60 fps | 17 ms | 0 | 7 | 76k |
+| 1440 by 900 at 2x | Radeon | 485 | 60 fps | 60 fps | 17 ms | 0 | 7 | 76k |
+
+The load was 44 at the start and 19 at the end. Draw calls and triangles count the shadow pass. The slabs and their heat tops are two instanced meshes, all buildings are one batched mesh, and the heat of every tile for every hour sits in one 96 by 96 layered texture, so moving the slider changes one number.
+
+### Load on a slow phone
+
+Lighthouse 13.6 in its default mobile mode. The District page without a place scored 100, 99 and 94 for performance with an LCP of 0.8 s and 70 to 280 ms of total blocking time, and 100 for accessibility on every run, at loads of 9, 11 and 8. Its heading is in the page HTML, and the store, the worker client and the 3D code load only after a place is picked. A run opened straight on Kelowna, which loads the whole district while Lighthouse watches, scored 100 for accessibility and 51 for performance at a load of 58.
+
+Home, yard and plan were measured one after the other against a build of the same code without the District page.
+
+| Page | This build | Same code without District | Script bytes, this build and without |
+| --- | --- | --- | --- |
+| Home | 74, 67, 69, 84, 70, 67, 71 | 86, 85, 69, 82, 82, 69, 68 | 471 KB and 467 KB |
+| Yard | 64, 76, 51 | 63, 57, 58 | 499 KB and 494 KB |
+| Plan | 90, 81, 87 | 90, 91, 89 | 129 KB and 127 KB |
+
+The load ranged from 8 to 113 during these runs, so neither build came near the numbers above that were taken under 3. The traces of both builds show the same tasks in the same order. In the second set of home runs, which started with the build without District each time, the pairs came out 84 and 82, 70 and 82, 67 and 69, and 71 and 68. No District code loads on these pages. The few extra kilobytes are Rollup splitting the modules both pages share, such as the search list, the slider and the heat ramp, into chunks of their own.

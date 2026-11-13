@@ -48,3 +48,5 @@ npm run dev
 - Loading another school depends on public map servers that are sometimes busy.
 
 See `PERF.md` for measured frame times.
+
+The District page at `site/src/pages/district.astro` takes a city or district, finds up to 48 of its schools, models each one on the same hottest day and lists them hottest first, with the work in `site/src/engine/district.ts` and `site/src/components/district`.
