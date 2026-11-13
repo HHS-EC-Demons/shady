@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { roofUnits, type RoofUnit } from '@/engine/roof';
 
 type Random = () => number;
 
@@ -592,139 +593,29 @@ function box(builder: Builder, center: THREE.Vector3, along: THREE.Vector3, acro
   face([p[3], p[0], q[0], q[3]]);
 }
 
-function inside(ring: [number, number][], x: number, y: number): boolean {
-  let hit = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i, i += 1) {
-    const [xi, yi] = ring[i];
-    const [xj, yj] = ring[j];
-    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) hit = !hit;
-  }
-  return hit;
-}
-
-function edgeGap(ring: [number, number][], x: number, y: number): number {
-  let best = Infinity;
-  for (let i = 0; i < ring.length; i += 1) {
-    const [ax, ay] = ring[i];
-    const [bx, by] = ring[(i + 1) % ring.length];
-    const dx = bx - ax;
-    const dy = by - ay;
-    const span = dx * dx + dy * dy;
-    const t = span > 0 ? clamp(((x - ax) * dx + (y - ay) * dy) / span) : 0;
-    best = Math.min(best, Math.hypot(x - ax - dx * t, y - ay - dy * t));
-  }
-  return best;
-}
-
-function tidy(ring: [number, number][]): [number, number][] {
-  const out: [number, number][] = [];
-  for (const point of ring) {
-    const last = out[out.length - 1];
-    if (!last || Math.hypot(point[0] - last[0], point[1] - last[1]) > 1e-6) out.push(point);
-  }
-  if (out.length > 1 && Math.hypot(out[0][0] - out[out.length - 1][0], out[0][1] - out[out.length - 1][1]) < 1e-6) out.pop();
-  return out;
-}
-
 export function buildRoofUnits(
   blocks: { ring: [number, number][]; height: number }[],
   toScene: (x: number, y: number) => [number, number, number],
+  units: RoofUnit[] = roofUnits(blocks.map((block) => block.ring)),
 ): THREE.BufferGeometry | null {
+  if (units.length === 0) return null;
   const builder = new Builder();
-  let placed = 0;
-  for (const block of blocks) {
-    const ring = tidy(block.ring);
-    if (ring.length < 3) continue;
-    let twice = 0;
-    let sumX = 0;
-    let sumY = 0;
-    let longest = 0;
-    let ux = 1;
-    let uy = 0;
-    for (let i = 0; i < ring.length; i += 1) {
-      const [ax, ay] = ring[i];
-      const [bx, by] = ring[(i + 1) % ring.length];
-      const cross = ax * by - bx * ay;
-      twice += cross;
-      sumX += (ax + bx) * cross;
-      sumY += (ay + by) * cross;
-      const length = Math.hypot(bx - ax, by - ay);
-      if (length > longest) {
-        longest = length;
-        ux = (bx - ax) / length;
-        uy = (by - ay) / length;
-      }
-    }
-    const area = Math.abs(twice) / 2;
-    if (area < 500) continue;
-    const wanted = Math.min(14, Math.max(1, Math.round(area / 700)));
-    const midX = Math.abs(twice) > 1e-9 ? sumX / (3 * twice) : ring.reduce((sum, point) => sum + point[0], 0) / ring.length;
-    const midY = Math.abs(twice) > 1e-9 ? sumY / (3 * twice) : ring.reduce((sum, point) => sum + point[1], 0) / ring.length;
-    const vx = -uy;
-    const vy = ux;
-    let lowU = Infinity;
-    let highU = -Infinity;
-    let lowV = Infinity;
-    let highV = -Infinity;
-    for (const [x, y] of ring) {
-      const u = (x - midX) * ux + (y - midY) * uy;
-      const v = (x - midX) * vx + (y - midY) * vy;
-      lowU = Math.min(lowU, u);
-      highU = Math.max(highU, u);
-      lowV = Math.min(lowV, v);
-      highV = Math.max(highV, v);
-    }
-    const random = seeded(Math.round(area * 13) ^ Math.round(ring[0][0] * 97) ^ Math.round(ring[0][1] * 31));
-    const stepU = 7;
-    const stepV = 5.5;
-    const columns = Math.floor((highU - lowU) / stepU);
-    const rows = Math.floor((highV - lowV) / stepV);
-    const startU = (lowU + highU) / 2 - (columns * stepU) / 2;
-    const startV = (lowV + highV) / 2 - (rows * stepV) / 2;
-    type Unit = { u: number; v: number; long: number; wide: number; tall: number; fans: number; rank: number };
-    const options: Unit[] = [];
-    for (let row = 0; row <= rows; row += 1) {
-      for (let column = 0; column <= columns; column += 1) {
-        const long = 2 + random() * 2;
-        const wide = 1.5 + random() * 1;
-        const tall = 1 + random() * 0.6;
-        const fans = long > 3.1 ? 2 : random() > 0.45 ? 1 : 0;
-        const u = startU + column * stepU + (random() - 0.5) * 1.2;
-        const v = startV + row * stepV + (random() - 0.5) * 0.6;
-        let fits = true;
-        for (const su of [-1, 0, 1]) {
-          for (const sv of [-1, 0, 1]) {
-            const pu = u + su * long * 0.5;
-            const pv = v + sv * wide * 0.5;
-            const x = midX + pu * ux + pv * vx;
-            const y = midY + pu * uy + pv * vy;
-            if (!inside(ring, x, y) || edgeGap(ring, x, y) < 4) fits = false;
-          }
-        }
-        if (fits) options.push({ u, v, long, wide, tall, fans, rank: Math.hypot(u, v * 1.4) + random() * 2 });
-      }
-    }
-    options.sort((a, b) => a.rank - b.rank);
-    for (const unit of options.slice(0, wanted)) {
-      const x = midX + unit.u * ux + unit.v * vx;
-      const y = midY + unit.u * uy + unit.v * vy;
-      const [sx, , sz] = toScene(x, y);
-      const [tx, , tz] = toScene(x + ux, y + uy);
-      const along = new THREE.Vector3(tx - sx, 0, tz - sz).normalize();
-      const across = new THREE.Vector3(-along.z, 0, along.x);
-      const center = new THREE.Vector3(sx, 0, sz);
-      const base = block.height;
-      box(builder, center, along, across, unit.long, unit.wide, base, base + unit.tall);
-      const fan = Math.min(unit.wide * 0.32, 0.62);
-      for (let index = 0; index < unit.fans; index += 1) {
-        const shift = unit.fans === 2 ? (index === 0 ? -0.25 : 0.25) * unit.long : 0;
-        const spot = center.clone().addScaledVector(along, shift);
-        cylinder(builder, new THREE.Vector3(spot.x, base + unit.tall - 0.02, spot.z), new THREE.Vector3(spot.x, base + unit.tall + 0.22, spot.z), fan, 12, true);
-      }
-      placed += 1;
+  for (const unit of units) {
+    const { x, y, ux, uy } = unit;
+    const [sx, , sz] = toScene(x, y);
+    const [tx, , tz] = toScene(x + ux, y + uy);
+    const along = new THREE.Vector3(tx - sx, 0, tz - sz).normalize();
+    const across = new THREE.Vector3(-along.z, 0, along.x);
+    const center = new THREE.Vector3(sx, 0, sz);
+    const base = blocks[unit.block].height;
+    box(builder, center, along, across, unit.long, unit.wide, base, base + unit.tall);
+    const fan = Math.min(unit.wide * 0.32, 0.62);
+    for (let index = 0; index < unit.fans; index += 1) {
+      const shift = unit.fans === 2 ? (index === 0 ? -0.25 : 0.25) * unit.long : 0;
+      const spot = center.clone().addScaledVector(along, shift);
+      cylinder(builder, new THREE.Vector3(spot.x, base + unit.tall - 0.02, spot.z), new THREE.Vector3(spot.x, base + unit.tall + 0.22, spot.z), fan, 12, true);
     }
   }
-  if (placed === 0) return null;
   return builder.geometry();
 }
 

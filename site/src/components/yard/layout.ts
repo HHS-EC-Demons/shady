@@ -1,5 +1,5 @@
 import type { Campus, Patch } from '@/engine/campus';
-import { insideRing, ringArea, ringDistance, type Point, type Ring } from '@/engine/geometry';
+import { boxOf, insideRing, ringArea, ringDistance, type Box, type Point, type Ring } from '@/engine/geometry';
 
 export type OrientedBox = { x: number; y: number; ux: number; uy: number; long: number; short: number };
 export type Area = OrientedBox & { ring: Ring };
@@ -201,6 +201,22 @@ export function walkers(campus: Campus, keep: (x: number, y: number) => boolean 
   return thin(found, WALKER_LIMIT);
 }
 
+const BOX_SLACK = 1e-6;
+const ringBoxes = new WeakMap<Ring, Box>();
+
+function ringBox(ring: Ring): Box {
+  let box = ringBoxes.get(ring);
+  if (!box) {
+    box = boxOf([ring]);
+    ringBoxes.set(ring, box);
+  }
+  return box;
+}
+
 export function onRoof(campus: Campus, x: number, y: number): boolean {
-  return campus.blocks.some((block) => insideRing(block.ring, x, y));
+  return campus.blocks.some((block) => {
+    const box = ringBox(block.ring);
+    if (y < box.minY || y >= box.maxY || x < box.minX - BOX_SLACK || x > box.maxX + BOX_SLACK) return false;
+    return insideRing(block.ring, x, y);
+  });
 }
