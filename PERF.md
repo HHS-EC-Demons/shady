@@ -37,6 +37,8 @@ Pass 1 ran first in a fresh browser and the load rose from 2.3 to 5.1 during it.
 
 Pass 4 ran in a fresh browser after the yard canvas change below, with the load at 3.0 at the start and 4.3 at the end. Every row was 60 fps average and 60 fps at the 1% low with a worst frame of 17 ms and no slow frames, except Intel at 1440 by 900 with 486 frames, a worst frame of 33 ms and 3 slow frames.
 
+The live site at https://hhs-ec-demons.github.io/shady/ was scrolled the same way at 1080p just after another build on this machine ended, with the load at 3.4 at the start and 4.5 at the end. Intel UHD Graphics 630 on medium had 549 frames, 59 fps, 30 fps at the 1% low, a worst frame of 33 ms and 7 slow frames. Radeon Pro 555X on high had 556 frames, 60 fps, 60 fps at the 1% low, a worst frame of 17 ms and no slow frames.
+
 The phone row is this laptop at phone size. It reports the high tier because headless Chrome has no touch pointer.
 
 ## GPU time per frame
