@@ -1,10 +1,15 @@
-import { treeAt, type Campus, type Surface, type Tree } from '@/engine/campus';
+import { surfaceChoices, treeAt, type Campus, type Surface, type Tree } from '@/engine/campus';
+import type { Point } from '@/engine/geometry';
 import type { Found } from '@/engine/osm';
+import type { HeightFix, SurfaceFix } from '@/engine/share';
 import type { Weather } from '@/engine/weather';
 import type { Saved, Yard } from './controller';
 
 export type Was = { patches?: Record<string, Surface>; blocks?: Record<string, number>; trees?: Tree[] };
-export type Bundle = { campus: Campus; weather: Weather; school?: Found | null; was?: Was };
+export type Bundle = { campus: Campus; weather: Weather; school?: Found | null; was?: Was; hottest?: Weather };
+export type Fixes = { surfaces: SurfaceFix[]; heights: HeightFix[]; cut: Point[] };
+
+const FEET = 3.28084;
 
 const SCHOOL = 'shady.school.v1';
 
@@ -97,6 +102,57 @@ export function cutTree(bundle: Bundle, x: number, y: number): Bundle | null {
   const back = treeAt(gone, x, y);
   if (back < 0) return null;
   return { ...bundle, campus: { ...bundle.campus, trees: [...trees, gone[back]] }, was: { ...was, trees: gone.filter((_, index) => index !== back) } };
+}
+
+export function fixesOf(bundle: Bundle): Fixes {
+  const { campus, was = {} } = bundle;
+  const surfaces: SurfaceFix[] = [];
+  for (const key of Object.keys(was.patches ?? {})) {
+    const index = Number(key);
+    const from = was.patches?.[key];
+    const patch = campus.patches[index];
+    if (from && patch && patch.surface !== from) surfaces.push({ patch: index, from, to: patch.surface });
+  }
+  const heights: HeightFix[] = [];
+  for (const key of Object.keys(was.blocks ?? {})) {
+    const index = Number(key);
+    const block = campus.blocks[index];
+    if (!block || !Number.isSafeInteger(block.id) || block.id < 1) continue;
+    let nth = 0;
+    for (let other = 0; other < index; other += 1) if (campus.blocks[other].id === block.id) nth += 1;
+    heights.push({ building: block.id, nth, feet: Math.min(2000, Math.max(1, Math.round(block.height * FEET))) });
+  }
+  surfaces.sort((a, b) => a.patch - b.patch);
+  heights.sort((a, b) => a.building - b.building || a.nth - b.nth);
+  const cut = (was.trees ?? []).map((tree): Point => [Math.round(tree.x * 10) / 10, Math.round(tree.y * 10) / 10]);
+  return { surfaces, heights, cut };
+}
+
+export function applyFixes(start: Bundle, fixes: Fixes): Bundle {
+  let bundle = start;
+  for (const fix of fixes.surfaces) {
+    const patch = bundle.campus.patches[fix.patch];
+    if (patch && patch.surface === fix.from && surfaceChoices(fix.from).includes(fix.to)) bundle = editSurface(bundle, fix.patch, fix.to);
+  }
+  for (const fix of fixes.heights) {
+    let seen = 0;
+    for (let index = 0; index < bundle.campus.blocks.length; index += 1) {
+      if (bundle.campus.blocks[index].id !== fix.building) continue;
+      if (seen === fix.nth) {
+        bundle = editHeight(bundle, index, fix.feet / FEET);
+        break;
+      }
+      seen += 1;
+    }
+  }
+  for (const [x, y] of fixes.cut ?? []) {
+    if (treeAt(bundle.campus.trees, x, y) >= 0) bundle = cutTree(bundle, x, y) ?? bundle;
+  }
+  return bundle;
+}
+
+export function hasFixes(fixes: Fixes): boolean {
+  return fixes.surfaces.length + fixes.heights.length + (fixes.cut?.length ?? 0) > 0;
 }
 
 export function storedPlan(campus: Campus): Saved | null {
