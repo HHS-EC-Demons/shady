@@ -20,6 +20,7 @@ const base = raw.endsWith('/') ? raw : `${raw}/`;
 const links = [
   { slug: 'yard', label: 'Yard' },
   { slug: 'plan', label: 'Plan' },
+  { slug: 'district', label: 'District' },
   { slug: 'sources', label: 'Sources' },
 ];
 const fullTitle = title === 'Shady' ? 'Shady' : `${title} | Shady`;
@@ -63,7 +64,7 @@ const address = new URL(Astro.url.pathname, home).href;
           {
             links.map((link) => (
               <li>
-                <a href={`${base}${link.slug}/`} aria-current={current === link.slug ? 'page' : undefined}>
+                <a href={`${base}${link.slug}/`} aria-current={current === link.slug ? 'page' : undefined} class="max-[479px]:px-[7px] max-[479px]:text-[0.875rem] max-[389px]:px-[5px] max-[389px]:text-[0.8125rem]">
                   {link.label}
                 </a>
               </li>

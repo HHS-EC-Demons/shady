@@ -1,0 +1,15 @@
+---
+import Base from '../layouts/Base.astro';
+import District from '../components/district/District.tsx';
+
+const raw = import.meta.env.BASE_URL;
+const base = raw.endsWith('/') ? raw : `${raw}/`;
+---
+
+<Base title="District" description="Every school in a city or district on its hottest day, hottest first." current="district">
+  <District client:only="react" base={base}>
+    <section slot="fallback" class="shell mx-auto w-full max-w-[880px] pb-20 pt-12">
+      <h1 class="max-w-[12ch] text-[length:clamp(2.5rem,5.4vw,4.25rem)]">Shade your district.</h1>
+    </section>
+  </District>
+</Base>

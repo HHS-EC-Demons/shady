@@ -26,7 +26,7 @@ import { decodePlan } from '@/engine/share';
 import { clockLabel } from '@/engine/sun';
 import { FIRST_DAY, dayWeather, lastDay, localDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
 import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Cut, type Saved, type Tool } from './controller';
-import { NoWeather, Unmapped, placeBundle, stopPhotos, type Stage } from './loader';
+import { NoWeather, Unmapped, ownHottest, picked, placeBundle, stopPhotos, type Shown, type Stage } from './loader';
 import { quality } from './quality';
 import { rememberFixes } from './recall';
 import { SchoolPicker } from './SchoolPicker';
@@ -85,7 +85,7 @@ function dateOf(text: string): Date {
 }
 
 function dayOf(bundle: Bundle): Day {
-  return bundle.hottest && bundle.hottest.date !== bundle.weather.date ? 'pick' : 'hottest';
+  return picked(bundle) || (bundle.hottest && bundle.hottest.date !== bundle.weather.date) ? 'pick' : 'hottest';
 }
 
 type DayChoiceProps = { day: Day; picked: string; onDay: (day: Day, date?: string) => void; refocus: RefObject<boolean> };
@@ -835,9 +835,20 @@ export default function YardStage({ base }: { base: string }) {
     const settle = () => {
       if (plain !== current) keepSchool(plain);
     };
-    const target = wanted === 'pick' && date === hottest.date ? 'hottest' : wanted;
+    const unknown = picked(current);
+    const target = wanted === 'pick' && !unknown && date === hottest.date ? 'hottest' : wanted;
     if (target === 'hottest') {
       if (day === 'hottest') return;
+      if (unknown && current.school) {
+        const own = await ownHottest(current.school).catch(() => null);
+        if (!own || bundle.current !== current) return;
+        const next: Shown = { ...current, weather: own, hottest: undefined, picked: false };
+        keepSchool(next);
+        refocus.current = true;
+        setDay('hottest');
+        void show(next);
+        return;
+      }
       settle();
       refocus.current = true;
       setDay('hottest');
@@ -863,7 +874,7 @@ export default function YardStage({ base }: { base: string }) {
     try {
       const weather = await dayWeather(lat, lon, date, localDay());
       if (bundle.current !== current) return;
-      const next: Bundle = { ...current, weather, hottest };
+      const next: Bundle = unknown ? { ...current, weather } : { ...current, weather, hottest };
       keepSchool(next);
       refocus.current = true;
       setDay('pick');

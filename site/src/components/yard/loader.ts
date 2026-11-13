@@ -1,4 +1,4 @@
-import { outdated, type Campus } from '@/engine/campus';
+import { mapped, outdated, type Campus } from '@/engine/campus';
 import { fresh, placeKey } from '@/engine/memory';
 import { loadCampus, type Found } from '@/engine/osm';
 import { pause } from '@/engine/race';
@@ -7,6 +7,7 @@ import { recall, remember, touch, type Memory } from './recall';
 import { applyFixes, fixesOf, hasFixes, keptSchool, rebase, type Bundle, type Fixes } from './store';
 
 export type Stage = 'map' | 'weather';
+export type Shown = Bundle & { picked?: boolean };
 export type Arrival = { bundle: Bundle; pristine: Campus; late: Promise<Campus | null>; cached: boolean };
 export type Flight = { key: string; stage: Stage; done: Promise<Arrival>; listen: (listener: (stage: Stage) => void) => () => void };
 
@@ -50,10 +51,6 @@ function photo(key: string, campus: Campus): Promise<Campus> {
   return Promise.all([asked, pause(SLOW)]).then(([value]) => ({ ...value, trees: [...value.trees] }));
 }
 
-export function mapped(campus: Campus): boolean {
-  return campus.blocks.some((block) => block.home) || campus.patches.length > 0;
-}
-
 export function usable(memory: Memory, now: number): boolean {
   return fresh(memory, now) && !outdated(memory.campus) && mapped(memory.campus);
 }
@@ -83,12 +80,29 @@ function bundleOf(found: Found, campus: Campus, weather: Weather, fixes: Fixes):
   return hasFixes(fixes) ? applyFixes(bundle, fixes) : bundle;
 }
 
-async function keepLate(found: Found, campus: Campus, weather: Weather, at?: number): Promise<void> {
+export function picked(bundle: Bundle): boolean {
+  return (bundle as Shown).picked === true;
+}
+
+function onDay(bundle: Bundle, day: Weather | undefined, hottest: Weather | null): Shown {
+  if (!day) return bundle;
+  if (hottest && hottest.date === day.date) return { ...bundle, weather: day };
+  return hottest ? { ...bundle, weather: day, hottest } : { ...bundle, weather: day, picked: true };
+}
+
+export async function ownHottest(found: Found): Promise<Weather> {
+  const weather = await hottestDay(found.lat, found.lon);
+  const memory = await recall(found);
+  if (memory) void remember({ ...memory, weather });
+  return weather;
+}
+
+async function keepLate(found: Found, campus: Campus, weather: Weather | null, at?: number): Promise<void> {
   const memory = await recall(found);
   await remember({ found, campus, weather: memory?.weather ?? weather, enriched: true, fixes: memory?.fixes ?? NONE, at: memory?.at ?? at });
 }
 
-function lateFrom(found: Found, asked: Promise<Campus>, before: Campus, weather: Weather, at?: number): Promise<Campus | null> {
+function lateFrom(found: Found, asked: Promise<Campus>, before: Campus, weather: Weather | null, at?: number): Promise<Campus | null> {
   return asked.then(
     (campus) => {
       if (campus === before || !mapped(campus)) return null;
@@ -103,12 +117,16 @@ function noWeather(): never {
   throw new NoWeather('No weather');
 }
 
-async function arrive(found: Found, say: (stage: Stage) => void): Promise<Arrival> {
+async function arrive(found: Found, say: (stage: Stage) => void, day?: Weather): Promise<Arrival> {
   const key = placeKey(found);
   const memory = await recall(found);
   const mine = fixesFor(found, memory);
   if (memory && usable(memory, Date.now())) {
     void touch(memory);
+    if (day) {
+      const late = memory.enriched ? Promise.resolve(null) : lateFrom(found, photo(key, memory.campus), memory.campus, memory.weather, memory.at);
+      return { bundle: onDay(bundleOf(found, memory.campus, day, fixesOn(mine, memory.campus)), day, memory.weather), pristine: memory.campus, late, cached: true };
+    }
     let weather = memory.weather;
     if (!weather) {
       say('weather');
@@ -159,13 +177,13 @@ async function arrive(found: Found, say: (stage: Stage) => void): Promise<Arriva
   const fixes = fixesOn(mine, shown);
   void remember({ found, campus: shown, weather, enriched: early !== null && early !== campus, fixes });
   const late = early !== null ? Promise.resolve(null) : lateFrom(found, asked, campus, weather);
-  return { bundle: bundleOf(found, shown, weather, fixes), pristine: shown, late, cached: false };
+  return { bundle: onDay(bundleOf(found, shown, weather, fixes), day, weather), pristine: shown, late, cached: false };
 }
 
-export function begin(found: Found): Flight {
+export function begin(found: Found, day?: Weather): Flight {
   const key = placeKey(found);
   const known = flights.get(key);
-  if (known) return known;
+  if (known && !day) return known;
   const listeners = new Set<(stage: Stage) => void>();
   const flight: Flight = {
     key,
@@ -177,10 +195,14 @@ export function begin(found: Found): Flight {
       return () => listeners.delete(listener);
     },
   };
-  flight.done = arrive(found, (stage) => {
-    flight.stage = stage;
-    for (const listener of listeners) listener(stage);
-  });
+  flight.done = arrive(
+    found,
+    (stage) => {
+      flight.stage = stage;
+      for (const listener of listeners) listener(stage);
+    },
+    day,
+  );
   flight.done.catch(() => {
     if (flights.get(key) === flight) flights.delete(key);
   });
