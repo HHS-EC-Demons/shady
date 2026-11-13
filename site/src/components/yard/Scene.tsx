@@ -11,7 +11,7 @@ import { treeHeight, treeRadius, type PlanTree, type Yard } from './controller';
 import { Ground } from './ground';
 import { BLOB_LIFT, buildBlob, buildBlock, buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint, type BlockModel } from './models';
 import { Props } from './props';
-import type { PropLevel } from './quality';
+import { TIERS, type PropLevel } from './quality';
 
 const INK = '#12261c';
 const LEAF = '#2f6243';
@@ -92,7 +92,7 @@ export function Blocks({ yard }: { yard: Yard }) {
   useEffect(() => () => units?.dispose(), [units]);
   const press = useRef<{ x: number; y: number; at: number; index: number } | null>(null);
   return (
-    <group>
+    <group name="blocks">
       {home.map(({ block, geometry, index }) => (
         <mesh
           key={`${block.id} ${index}`}
@@ -215,14 +215,14 @@ export function MappedTrees({ yard }: { yard: Yard }) {
   }, [trees, yard, model, blob]);
   if (trees.length === 0) return null;
   return (
-    <group>
+    <group name="trees">
       <instancedMesh ref={crowns} args={[model.crown, undefined, trees.length]} castShadow raycast={() => null}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>
       <instancedMesh ref={trunks} args={[model.trunk, undefined, trees.length]} castShadow raycast={() => null}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>
-      <instancedMesh ref={blobs} args={[blob.geometry, blob.material, trees.length]} renderOrder={-1} raycast={() => null} />
+      <instancedMesh ref={blobs} name="blobs" args={[blob.geometry, blob.material, trees.length]} renderOrder={-1} raycast={() => null} />
     </group>
   );
 }
@@ -388,7 +388,7 @@ function Plan({ yard }: { yard: Yard }) {
   );
 }
 
-export function Sun({ yard, reach, locked = false, shadow = 4096 }: { yard: Yard; reach: number; locked?: boolean; shadow?: number }) {
+export function Sun({ yard, reach, locked = false, shadow = TIERS.high.shadow }: { yard: Yard; reach: number; locked?: boolean; shadow?: number }) {
   const { camera, pointer, scene } = useThree();
   const controls = useThree((state) => state.controls) as OrbitControlsImpl | null;
   const ball = useRef<THREE.Group>(null);
@@ -497,7 +497,7 @@ export function Sun({ yard, reach, locked = false, shadow = 4096 }: { yard: Yard
 
   const size = reach * 0.045;
   return (
-    <group>
+    <group name="sun">
       <hemisphereLight ref={fill} args={[SKY, BOUNCE, 1.8]} />
       <directionalLight
         ref={light}
@@ -694,13 +694,14 @@ function Rig({ yard, reach }: { yard: Yard; reach: number }) {
 }
 
 export function Backdrop({ yard }: { yard: Yard }) {
+  const stacked = useThree((state) => state.gl.getContextAttributes()?.stencil === true);
   return (
     <>
       <color attach="background" args={['#e9eff1']} />
       <fog attach="fog" args={['#e9eff1', yard.radius * 4, yard.radius * 9]} />
-      <mesh rotation-x={-Math.PI / 2} position-y={-0.3} renderOrder={-2} raycast={() => null}>
+      <mesh name="backdrop" rotation-x={-Math.PI / 2} position-y={-0.3} renderOrder={stacked ? 2 : -2} raycast={() => null}>
         <circleGeometry args={[yard.radius * 12, 64]} />
-        <meshBasicMaterial color={PAPER} />
+        <meshBasicMaterial color={PAPER} stencilWrite={stacked} stencilWriteMask={0} stencilRef={1} stencilFunc={THREE.NotEqualStencilFunc} />
       </mesh>
     </>
   );
@@ -721,7 +722,7 @@ export function Pulse({ yard }: { yard: Yard }) {
 
 type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel };
 
-export function Scene({ yard, layer, shadow = 4096, texture = 4096, props = 'full' }: SceneProps) {
+export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS.high.texture, props = TIERS.high.props }: SceneProps) {
   const reach = sunReach(yard);
   return (
     <>
