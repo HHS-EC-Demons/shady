@@ -30,8 +30,10 @@ npm run dev
   - `places.ts` reports peak heat, hot hours and the walk to shade for each court, lot and field.
   - `story.ts` works out the numbers in the landing page captions at build time.
   - `cost.ts` prices a plan.
+  - `sports.ts` lays out the lines and equipment of each court and field from its sport on the map, and finds home plate on ball fields.
+  - `detail.ts` turns map tags for colours, roofs and covered paths into clay tones and shapes.
 - `site/src/pages/index.astro` is the landing film. `site/src/components/film` holds its scene and scroll state.
-- `site/src/pages/yard.astro` is the interactive model. `site/src/components/yard` holds its controller, ground, models and scene.
+- `site/src/pages/yard.astro` is the interactive model. `site/src/components/yard` holds its controller, ground, models, covers, sports gear and scene.
 - `site/src/components/plan` is the printable plan sheet.
 - `site/src/pages/sources.astro` lists every model number and its source.
 - `pipeline/fetch_campus.ts` rebuilds the default campus file with `bun pipeline/fetch_campus.ts`.
@@ -44,6 +46,8 @@ npm run dev
 - Building heights are estimates when the map has none. Tap a building to set its real height.
 - Unmapped ground counts as grass. The football field inside a running track is assumed to be artificial turf unless the aerial photo shows living grass. Tap any field, court or lot to set its real surface. Fixes are saved in the browser.
 - At US schools the trees already standing come from a USDA aerial photo that can be a few years old. Small trees and trees inside building courtyards are often missed. With the Tree tool, tap a standing tree to remove it and tap the same spot to bring it back.
+- Roofs without walls, such as carports, shelters and covered walkways, count as shaded ground under them.
+- Hoops, goals, nets and backstops are drawn because every court or field of that sport has them. Playground pieces follow a fixed pattern and are not mapped.
 - Shady reports ground temperature. It does not predict heat illness.
 - Loading another school depends on public map servers that are sometimes busy.
 

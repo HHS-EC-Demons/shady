@@ -1,4 +1,4 @@
-import type { Campus } from './campus';
+import { floating, type Campus } from './campus';
 import { makeGrid, polygonSpans, type Grid } from './raster';
 
 const CONTACT_LIMIT = 1024;
@@ -37,6 +37,7 @@ export function contactOf(campus: Campus, heat: Grid): Contact {
   const field = new Float32Array(cols * rows);
   const spare = new Float32Array(cols * rows);
   for (const block of campus.blocks) {
+    if (floating(block)) continue;
     polygonSpans(grid, block.ring, (row, from, to) => field.fill(255, row * cols + from, row * cols + to + 1));
   }
   const radius = Math.max(1, Math.round(CONTACT_REACH / cell));

@@ -101,6 +101,9 @@ function Map({ yard }: { yard: Yard }) {
             <path key={index} d={path(ring)} />
           ))}
         </clipPath>
+        <pattern id="covered" patternUnits="userSpaceOnUse" width={mark * 0.55} height={mark * 0.55} patternTransform="rotate(45)">
+          <line x1={0} y1={0} x2={0} y2={mark * 0.55} stroke="#47584f" strokeOpacity={0.55} strokeWidth={mark * 0.07} />
+        </pattern>
       </defs>
       <g clipPath={yard.campus.boundary.length > 0 ? 'url(#grounds)' : undefined}>
         <rect x={box.minX} y={-box.maxY} width={wide} height={tall} fill={fill(means[SURFACES.grass.code])} />
@@ -119,6 +122,9 @@ function Map({ yard }: { yard: Yard }) {
           ))}
         {yard.campus.trees.map((tree, index) => (
           <circle key={index} cx={tree.x} cy={-tree.y} r={Math.min(tree.radius, mark * 0.4)} fill="#6f8676" fillOpacity={0.75} />
+        ))}
+        {(yard.campus.covers ?? []).map((cover, index) => (
+          <path key={`cover ${index}`} d={path(cover.ring)} fill="url(#covered)" stroke="#47584f" strokeOpacity={0.7} strokeWidth={mark * 0.06} />
         ))}
       </g>
       {yard.campus.blocks

@@ -6,10 +6,13 @@ import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import { atHome, type Block, type Campus, type Tree } from '@/engine/campus';
+import { TONES } from '@/engine/detail';
+import { centerOf, type Point } from '@/engine/geometry';
 import { CANOPY_FLATTEN, type Sail } from '@/engine/shade';
 import { probeHeight, sunReach, treeHeight, treeRadius, type PlanTree, type Yard } from './controller';
 import { Ground, primeGround } from './ground';
-import { BLOB_LIFT, buildBlob, buildBlock, buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint, type BlockModel } from './models';
+import { BLOB_LIFT, buildBlob, buildBlock, buildCone, buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint, type BlockLook, type BlockModel } from './models';
+import { buildStructures } from './covers';
 import { Props, primeProps } from './props';
 import { TIERS, type PropLevel } from './quality';
 import { Prime, Stages, keep, take } from './stages';
@@ -42,23 +45,67 @@ function groundPoint(event: ThreeEvent<PointerEvent>): THREE.Vector3 | null {
 
 export { Ground, primeGround } from './ground';
 
-function prism(yard: Yard, block: Block, tint?: THREE.Color): BlockModel {
+const HOME_WALL = new THREE.Color(WALL);
+
+function standAway(campus: Campus, block: Block): [number, number] | undefined {
+  const [cx, cy] = centerOf(block.ring);
+  let best = Infinity;
+  let away: [number, number] | undefined;
+  const consider = (line: Point[], closed: boolean) => {
+    const count = closed ? line.length : line.length - 1;
+    for (let i = 0; i < count; i += 1) {
+      const [ax, ay] = line[i];
+      const [bx, by] = line[(i + 1) % line.length];
+      const dx = bx - ax;
+      const dy = by - ay;
+      const length = dx * dx + dy * dy;
+      const share = length > 0 ? Math.min(1, Math.max(0, ((cx - ax) * dx + (cy - ay) * dy) / length)) : 0;
+      const px = ax + dx * share;
+      const py = ay + dy * share;
+      const gap = Math.hypot(cx - px, cy - py);
+      if (gap < best && gap > 0.5) {
+        best = gap;
+        away = [(cx - px) / gap, (cy - py) / gap];
+      }
+    }
+  };
+  for (const patch of campus.patches) {
+    if (patch.sport || patch.label === 'Track' || /field|court/i.test(patch.label ?? '')) consider(patch.ring, true);
+  }
+  for (const strip of campus.strips) if (strip.surface === 'track') consider(strip.line, false);
+  return best < 120 ? away : undefined;
+}
+
+function prism(yard: Yard, block: Block, tint: THREE.Color): BlockModel {
   const footprint = block.ring.map(([x, y]): [number, number] => [x - yard.middle[0], y - yard.middle[1]]);
-  return buildBlock(footprint, block.height, tint ? { tint } : { home: true });
+  const look: BlockLook = { home: block.home, tint };
+  const top = block.top ?? block.tone;
+  if (top) look.top = new THREE.Color(TONES[top]);
+  if (block.min !== undefined) look.min = block.min;
+  if (block.roof) look.roof = block.roof;
+  if (block.rise !== undefined) look.rise = block.rise;
+  if (block.across) look.across = true;
+  if (block.slope !== undefined) look.slope = block.slope;
+  if (block.levels) look.levels = block.levels;
+  if (block.stand) {
+    const away = standAway(yard.campus, block);
+    if (away) look.stand = away;
+  }
+  return buildBlock(footprint, block.height, look);
 }
 
 function shellsOf(yard: Yard) {
   const mine = yard.campus.blocks
     .map((block, index) => ({ block, index }))
     .filter((item) => item.block.home)
-    .map((item) => ({ ...item, ...prism(yard, item.block) }));
+    .map((item) => ({ ...item, ...prism(yard, item.block, item.block.wall ? new THREE.Color(TONES[item.block.wall]) : HOME_WALL) }));
   const others = yard.campus.blocks
     .map((block, index) => ({ block, index }))
     .filter((item) => !item.block.home)
-    .map(({ block, index }) => prism(yard, block, NEIGHBORS[index % NEIGHBORS.length]).geometry);
+    .map(({ block, index }) => prism(yard, block, block.wall ? new THREE.Color(TONES[block.wall]) : NEIGHBORS[index % NEIGHBORS.length]).geometry);
   const merged = others.length > 0 ? mergeGeometries(others) : null;
   for (const other of others) other.dispose();
-  return { home: mine, away: merged };
+  return { home: mine, away: merged, built: buildStructures(yard.campus, yard.middle) };
 }
 
 export function primeBlocks(yard: Yard): void {
@@ -66,16 +113,17 @@ export function primeBlocks(yard: Yard): void {
 }
 
 export function Blocks({ yard }: { yard: Yard }) {
-  const { home, away } = useMemo(() => take(yard, 'shells', () => shellsOf(yard)), [yard]);
+  const { home, away, built } = useMemo(() => take(yard, 'shells', () => shellsOf(yard)), [yard]);
   useEffect(
     () => () => {
       for (const item of home) item.geometry.dispose();
       away?.dispose();
+      built?.dispose();
     },
-    [home, away],
+    [home, away, built],
   );
   const walls = useMemo(() => {
-    const mine = new THREE.MeshStandardMaterial({ color: WALL, roughness: 0.92, metalness: 0 });
+    const mine = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.92, metalness: 0 });
     const others = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 1, metalness: 0 });
     enhanceWalls(mine);
     enhanceWalls(others);
@@ -125,6 +173,11 @@ export function Blocks({ yard }: { yard: Yard }) {
         </mesh>
       ))}
       {away && <mesh geometry={away} material={walls.others} castShadow receiveShadow />}
+      {built && (
+        <mesh name="covers" geometry={built} castShadow receiveShadow raycast={() => null}>
+          <meshStandardMaterial vertexColors color="#ffffff" roughness={0.92} metalness={0} />
+        </mesh>
+      )}
       {units && (
         <mesh geometry={units} castShadow receiveShadow raycast={() => null}>
           <meshStandardMaterial color="#dfe5e4" roughness={0.9} />
@@ -200,19 +253,35 @@ export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true 
   const trunks = useRef<THREE.InstancedMesh>(null);
   const blobs = useRef<THREE.InstancedMesh>(null);
   const trees = useMemo(() => shownTrees(yard.campus, most), [yard.campus, most]);
+  const needles = useMemo(() => trees.filter((tree) => tree.needle), [trees]);
+  const broad = useMemo(() => trees.filter((tree) => !tree.needle), [trees]);
+  const cones = useRef<THREE.InstancedMesh>(null);
+  const firs = useMemo(() => (needles.length > 0 ? buildCone() : null), [needles.length > 0]);
+  useEffect(() => () => firs?.dispose(), [firs]);
   useEffect(() => {
     const matrix = new THREE.Matrix4();
     const turn = new THREE.Quaternion();
     const flat = new THREE.Quaternion();
     const shade = new THREE.Color();
+    let crown = 0;
+    let fir = 0;
     trees.forEach((tree, index) => {
       const [x, , z] = yard.toScene(tree.x, tree.y);
-      const tall = tree.radius * CANOPY_FLATTEN;
+      const tall = tree.needle ? tree.height * 0.82 : tree.radius * CANOPY_FLATTEN;
       const key = spotKey(tree);
       turn.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, (key % 3600) / 573);
-      matrix.compose(new THREE.Vector3(x, tree.height - tall, z), turn, new THREE.Vector3(tree.radius, tall, tree.radius));
-      crowns.current?.setMatrixAt(index, matrix);
-      crowns.current?.setColorAt(index, treeTint(key, MAPPED_LIFT, shade));
+      if (tree.needle) {
+        const wide = Math.min(tree.radius, tree.height * 0.32);
+        matrix.compose(new THREE.Vector3(x, tree.height - tall, z), turn, new THREE.Vector3(wide, tall, wide));
+        cones.current?.setMatrixAt(fir, matrix);
+        cones.current?.setColorAt(fir, treeTint(key, MAPPED_LIFT, shade));
+        fir += 1;
+      } else {
+        matrix.compose(new THREE.Vector3(x, tree.height - tall, z), turn, new THREE.Vector3(tree.radius, tall, tree.radius));
+        crowns.current?.setMatrixAt(crown, matrix);
+        crowns.current?.setColorAt(crown, treeTint(key, MAPPED_LIFT, shade));
+        crown += 1;
+      }
       const trunk = Math.max(0.5, tree.height - tall);
       const thick = girth(tree.radius);
       matrix.compose(new THREE.Vector3(x, trunk / 2, z), turn, new THREE.Vector3(thick, trunk, thick));
@@ -221,10 +290,11 @@ export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true 
       matrix.compose(new THREE.Vector3(x, BLOB_LIFT, z), flat, new THREE.Vector3(spread, 1, spread));
       blobs.current?.setMatrixAt(index, matrix);
     });
-    if (crowns.current) {
-      crowns.current.instanceMatrix.needsUpdate = true;
-      if (crowns.current.instanceColor) crowns.current.instanceColor.needsUpdate = true;
-      crowns.current.computeBoundingSphere();
+    for (const mesh of [crowns.current, cones.current]) {
+      if (!mesh) continue;
+      mesh.instanceMatrix.needsUpdate = true;
+      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.computeBoundingSphere();
     }
     if (trunks.current) {
       trunks.current.instanceMatrix.needsUpdate = true;
@@ -234,13 +304,20 @@ export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true 
       blobs.current.instanceMatrix.needsUpdate = true;
       blobs.current.computeBoundingSphere();
     }
-  }, [trees, yard, model, blob, grounded]);
+  }, [trees, yard, model, blob, grounded, firs]);
   if (trees.length === 0) return null;
   return (
     <group name="trees">
-      <instancedMesh ref={crowns} args={[model.crown, undefined, trees.length]} castShadow raycast={() => null}>
-        <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
-      </instancedMesh>
+      {broad.length > 0 && (
+        <instancedMesh ref={crowns} args={[model.crown, undefined, broad.length]} castShadow raycast={() => null}>
+          <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
+        </instancedMesh>
+      )}
+      {firs && (
+        <instancedMesh ref={cones} args={[firs, undefined, needles.length]} castShadow raycast={() => null}>
+          <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
+        </instancedMesh>
+      )}
       <instancedMesh ref={trunks} args={[model.trunk, undefined, trees.length]} raycast={() => null}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>

@@ -3,12 +3,14 @@ import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { atHome, type Campus } from '@/engine/campus';
 import type { Yard } from './controller';
+import type { Gear } from '@/engine/sports';
 import { along, axisHeading, bandPads, courts, fields, lightPoles, onRoof, parkingStalls, thin, walkers, type Area } from './layout';
+import { Clay, type Vec } from './clay';
+import { buildGear, type GearMeshes } from './gear';
 import { BLOB_LIFT, buildBlob } from './models';
 import { TIERS, type PropLevel } from './quality';
 import { keep, take } from './stages';
 
-type Vec = [number, number, number];
 type Placement = { x: number; y: number; heading: number; stretch?: number; color?: THREE.Color };
 type Kind = 'cars' | 'poles' | 'nets' | 'posts' | 'goals' | 'people';
 type Model = { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial };
@@ -22,7 +24,6 @@ const CAR_BLOB_LONG = 5.2;
 const CAR_BLOB_WIDE = 2.5;
 const POLE_CAP = 60;
 const NET_WIDTH = 12.8;
-const NET_POST = 0.914;
 const BAND_FILES = 10;
 const BAND_ROWS = 6;
 const BAND_GAP = 2.3;
@@ -73,163 +74,6 @@ function pick(list: string[], weights: number[], share: number): string {
     if (left < 0) return list[index];
   }
   return list[list.length - 1];
-}
-
-function facing(points: Vec[], centre: Vec): Vec | undefined {
-  let nx = 0;
-  let ny = 0;
-  let nz = 0;
-  let mx = 0;
-  let my = 0;
-  let mz = 0;
-  for (let index = 0; index < points.length; index += 1) {
-    const [ax, ay, az] = points[index];
-    const [bx, by, bz] = points[(index + 1) % points.length];
-    nx += (ay - by) * (az + bz);
-    ny += (az - bz) * (ax + bx);
-    nz += (ax - bx) * (ay + by);
-    mx += ax;
-    my += ay;
-    mz += az;
-  }
-  const length = Math.hypot(nx, ny, nz);
-  if (length < 1e-12) return undefined;
-  const count = points.length;
-  const outward = nx * (mx / count - centre[0]) + ny * (my / count - centre[1]) + nz * (mz / count - centre[2]) >= 0 ? 1 : -1;
-  return [(nx / length) * outward, (ny / length) * outward, (nz / length) * outward];
-}
-
-class Clay {
-  positions: number[] = [];
-  shades: number[] = [];
-  normals: (Vec | undefined)[] = [];
-  indices: number[] = [];
-
-  vertex(point: Vec, shade: Vec, normal?: Vec): number {
-    this.positions.push(point[0], point[1], point[2]);
-    this.shades.push(shade[0], shade[1], shade[2]);
-    this.normals.push(normal);
-    return this.positions.length / 3 - 1;
-  }
-
-  private at(index: number): Vec {
-    return [this.positions[index * 3], this.positions[index * 3 + 1], this.positions[index * 3 + 2]];
-  }
-
-  triangle(a: number, b: number, c: number, centre: Vec): void {
-    const [ax, ay, az] = this.at(a);
-    const [bx, by, bz] = this.at(b);
-    const [cx, cy, cz] = this.at(c);
-    const ex = bx - ax;
-    const ey = by - ay;
-    const ez = bz - az;
-    const fx = cx - ax;
-    const fy = cy - ay;
-    const fz = cz - az;
-    const nx = ey * fz - ez * fy;
-    const ny = ez * fx - ex * fz;
-    const nz = ex * fy - ey * fx;
-    const ox = (ax + bx + cx) / 3 - centre[0];
-    const oy = (ay + by + cy) / 3 - centre[1];
-    const oz = (az + bz + cz) / 3 - centre[2];
-    if (nx * ox + ny * oy + nz * oz >= 0) this.indices.push(a, b, c);
-    else this.indices.push(a, c, b);
-  }
-
-  face(points: Vec[], shade: number | Vec, centre: Vec): void {
-    const tone: Vec = typeof shade === 'number' ? [shade, shade, shade] : shade;
-    const normal = facing(points, centre);
-    const ids = points.map((point) => this.vertex(point, tone, normal));
-    for (let index = 1; index + 1 < ids.length; index += 1) this.triangle(ids[0], ids[index], ids[index + 1], centre);
-  }
-
-  loft(rings: Vec[][], shade: (segment: number, edge: number) => number | Vec, centre: Vec): void {
-    for (let segment = 0; segment + 1 < rings.length; segment += 1) {
-      const from = rings[segment];
-      const to = rings[segment + 1];
-      for (let edge = 0; edge < from.length; edge += 1) {
-        const next = (edge + 1) % from.length;
-        this.face([from[edge], from[next], to[next], to[edge]], shade(segment, edge), centre);
-      }
-    }
-  }
-
-  box(low: Vec, high: Vec, shade: number | Vec): void {
-    const [x0, y0, z0] = low;
-    const [x1, y1, z1] = high;
-    const bottom: Vec[] = [[x0, y0, z0], [x1, y0, z0], [x1, y0, z1], [x0, y0, z1]];
-    const top: Vec[] = [[x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]];
-    const centre: Vec = [(x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2];
-    this.loft([bottom, top], () => shade, centre);
-    this.face(bottom, shade, centre);
-    this.face(top, shade, centre);
-  }
-
-  tube(from: Vec, to: Vec, radius: number, sides: number, shade: number | Vec): void {
-    const axis = new THREE.Vector3(to[0] - from[0], to[1] - from[1], to[2] - from[2]).normalize();
-    const helper = Math.abs(axis.y) > 0.9 ? new THREE.Vector3(1, 0, 0) : new THREE.Vector3(0, 1, 0);
-    const side = new THREE.Vector3().crossVectors(axis, helper).normalize();
-    const other = new THREE.Vector3().crossVectors(axis, side).normalize();
-    const ring = (base: Vec): Vec[] =>
-      Array.from({ length: sides }, (_, step) => {
-        const angle = (step / sides) * Math.PI * 2;
-        const c = Math.cos(angle) * radius;
-        const s = Math.sin(angle) * radius;
-        return [base[0] + side.x * c + other.x * s, base[1] + side.y * c + other.y * s, base[2] + side.z * c + other.z * s];
-      });
-    const start = ring(from);
-    const end = ring(to);
-    const centre: Vec = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2, (from[2] + to[2]) / 2];
-    this.loft([start, end], () => shade, centre);
-    this.face(start, shade, centre);
-    this.face(end, shade, centre);
-  }
-
-  lathe(profile: [number, number][], sides: number, depth: number, shade: number): void {
-    const tone: Vec = [shade, shade, shade];
-    let low = Infinity;
-    let high = -Infinity;
-    for (const [y] of profile) {
-      low = Math.min(low, y);
-      high = Math.max(high, y);
-    }
-    const centre: Vec = [0, (low + high) / 2, 0];
-    const rows = profile.map(([y, radius]) => {
-      if (radius <= 0) return [this.vertex([0, y, 0], tone)];
-      return Array.from({ length: sides }, (_, step) => {
-        const angle = ((step + 0.5) / sides) * Math.PI * 2;
-        return this.vertex([Math.cos(angle) * radius * depth, y, Math.sin(angle) * radius], tone);
-      });
-    });
-    for (let row = 0; row + 1 < rows.length; row += 1) {
-      const a = rows[row];
-      const b = rows[row + 1];
-      for (let step = 0; step < sides; step += 1) {
-        const next = (step + 1) % sides;
-        if (a.length === 1) this.triangle(a[0], b[step], b[next], centre);
-        else if (b.length === 1) this.triangle(a[step], a[next], b[0], centre);
-        else {
-          this.triangle(a[step], a[next], b[next], centre);
-          this.triangle(a[step], b[next], b[step], centre);
-        }
-      }
-    }
-  }
-
-  geometry(colored: boolean): THREE.BufferGeometry {
-    const geometry = new THREE.BufferGeometry();
-    geometry.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
-    if (colored) geometry.setAttribute('color', new THREE.Float32BufferAttribute(this.shades, 3));
-    geometry.setIndex(this.indices);
-    geometry.computeVertexNormals();
-    const normal = geometry.getAttribute('normal');
-    this.normals.forEach((flat, index) => {
-      if (flat) normal.setXYZ(index, flat[0], flat[1], flat[2]);
-    });
-    geometry.computeBoundingSphere();
-    geometry.computeBoundingBox();
-    return geometry;
-  }
 }
 
 function section(x: number, half: number, top: number, bottom: number): Vec[] {
@@ -390,8 +234,13 @@ function sheer(color: string, opacity: number): THREE.MeshStandardMaterial {
   return new THREE.MeshStandardMaterial({ color, transparent: true, opacity, depthWrite: false, roughness: 0.95, metalness: 0 });
 }
 
-function buildModels(): Record<Kind, Model> {
+function buildModels(): Record<Kind, Model> & { gear: THREE.MeshStandardMaterial; mesh: THREE.MeshStandardMaterial } {
+  const mesh = sheer('#ffffff', NET_OPACITY);
+  mesh.vertexColors = true;
+  mesh.side = THREE.DoubleSide;
   return {
+    gear: material('#ffffff', true),
+    mesh,
     cars: { geometry: buildCar(), material: material('#ffffff', true) },
     poles: { geometry: buildPole(), material: material(STEEL, false) },
     nets: { geometry: buildNetPanel(), material: sheer(NET_PANEL, NET_OPACITY) },
@@ -405,12 +254,6 @@ function courtLines(court: Area): { half: number; side: number } | null {
   const half = Math.min(11.89, court.long / 2 - 2.5);
   const side = Math.min(5.49, court.short / 2 - 1.5);
   return half < 4 || side < 2 ? null : { half, side };
-}
-
-function fieldEnds(field: Area): number | null {
-  const half = Math.min(field.long / 2 - 1, 54.86);
-  const side = Math.min(field.short / 2 - 1, 24.38);
-  return half < 20 || side < 10 ? null : half;
 }
 
 function free(campus: Campus, x: number, y: number): boolean {
@@ -450,28 +293,8 @@ function placePoles(yard: Yard): Placement[] {
   return thin(poles, POLE_CAP).map((pole, index) => ({ x: pole.x, y: pole.y, heading: pole.heading + (index % 2 === 0 ? 0 : Math.PI) }));
 }
 
-function placeNets(yard: Yard): Placement[] {
-  const result: Placement[] = [];
-  for (const court of homeAreas(yard.campus, courts(yard.campus))) {
-    const lines = courtLines(court);
-    if (!lines) continue;
-    const width = Math.min(NET_WIDTH, 2 * (lines.side + NET_POST));
-    result.push({ x: court.x, y: court.y, heading: axisHeading(court), stretch: width / NET_WIDTH });
-  }
-  return result;
-}
-
-function placeGoals(yard: Yard): Placement[] {
-  const result: Placement[] = [];
-  for (const field of homeAreas(yard.campus, fields(yard.campus))) {
-    const half = fieldEnds(field);
-    if (half === null) continue;
-    for (const end of [-1, 1]) {
-      const [x, y] = along(field, end * half, 0);
-      if (free(yard.campus, x, y)) result.push({ x, y, heading: axisHeading(field) });
-    }
-  }
-  return result;
+function placeGear(gear: Gear[]): Placement[] {
+  return gear.map((item) => ({ x: item.x, y: item.y, heading: item.heading, stretch: item.size }));
 }
 
 function placePeople(yard: Yard, light: boolean): Placement[] {
@@ -579,15 +402,21 @@ function blobs(yard: Yard, blob: ReturnType<typeof buildBlob>, cars: Placement[]
   return mesh;
 }
 
-function placeAll(yard: Yard, level: NonNullable<PropLevel>): Record<Kind, Placement[]> {
-  const nets = placeNets(yard);
+type Placed = { lists: Record<Kind, Placement[]>; gear: GearMeshes };
+
+function placeAll(yard: Yard, level: NonNullable<PropLevel>): Placed {
+  const gear = buildGear(yard.campus, yard.middle);
+  const nets = placeGear(gear.nets);
   return {
-    cars: placeCars(yard, level.cars),
-    poles: placePoles(yard),
-    nets,
-    posts: nets,
-    goals: placeGoals(yard),
-    people: thin(placePeople(yard, level.light), level.people),
+    lists: {
+      cars: placeCars(yard, level.cars),
+      poles: placePoles(yard),
+      nets,
+      posts: nets,
+      goals: placeGear(gear.uprights).map((item) => ({ ...item, stretch: 1 })),
+      people: thin(placePeople(yard, level.light), level.people),
+    },
+    gear,
   };
 }
 
@@ -608,6 +437,8 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
         models[kind].geometry.dispose();
         models[kind].material.dispose();
       }
+      models.gear.dispose();
+      models.mesh.dispose();
       blob.geometry.dispose();
       blob.material.dispose();
     },
@@ -615,28 +446,51 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
   );
   const meshes = useMemo(() => {
     if (!level) return [];
-    const placed = take(yard, placedKey(level), () => placeAll(yard, level));
+    const { lists: placed, gear } = take(yard, placedKey(level), () => placeAll(yard, level));
     const shades = blobs(yard, blob, placed.cars);
+    const merged: { kind: string; mesh: THREE.Mesh }[] = [];
+    if (gear.solid) {
+      const mesh = new THREE.Mesh(gear.solid, models.gear);
+      mesh.castShadow = level.shadows;
+      mesh.receiveShadow = true;
+      mesh.matrixAutoUpdate = false;
+      merged.push({ kind: 'gear', mesh });
+    }
+    if (gear.sheer) {
+      const mesh = new THREE.Mesh(gear.sheer, models.mesh);
+      mesh.renderOrder = 2;
+      mesh.matrixAutoUpdate = false;
+      merged.push({ kind: 'mesh', mesh });
+    }
     return [
       ...KINDS.flatMap((kind) => {
         const mesh = instanced(yard, models[kind], placed[kind], level.shadows);
         if (mesh && models[kind].material.transparent) mesh.renderOrder = 2;
-        return mesh ? [{ kind: kind as string, mesh }] : [];
+        return mesh ? [{ kind: kind as string, mesh: mesh as THREE.Mesh }] : [];
       }),
-      ...(shades ? [{ kind: 'car shades', mesh: shades }] : []),
+      ...merged,
+      ...(shades ? [{ kind: 'car shades', mesh: shades as THREE.Mesh }] : []),
     ];
   }, [yard, level, models, blob]);
   useEffect(
     () => () => {
-      for (const { mesh } of meshes) mesh.dispose();
+      for (const { mesh } of meshes) {
+        if (mesh instanceof THREE.InstancedMesh) mesh.dispose();
+        else mesh.geometry.dispose();
+      }
     },
     [meshes],
   );
   const reach = useMemo(() => {
     const box = new THREE.Box3();
     for (const { mesh } of meshes) {
-      if (!mesh.boundingBox) mesh.computeBoundingBox();
-      if (mesh.boundingBox) box.union(mesh.boundingBox);
+      if (mesh instanceof THREE.InstancedMesh) {
+        if (!mesh.boundingBox) mesh.computeBoundingBox();
+        if (mesh.boundingBox) box.union(mesh.boundingBox);
+      } else {
+        if (!mesh.geometry.boundingBox) mesh.geometry.computeBoundingBox();
+        if (mesh.geometry.boundingBox) box.union(mesh.geometry.boundingBox);
+      }
     }
     return { box, shown: true };
   }, [meshes]);

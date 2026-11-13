@@ -1,5 +1,5 @@
 import { rasterize, simCell } from '../site/src/engine/campus';
-import { backdropOf, hottestMinute, simulate, tally } from '../site/src/engine/heat';
+import { backdropOf, fixedOf, hottestMinute, simulate, tally } from '../site/src/engine/heat';
 import { findSchools, loadCampus } from '../site/src/engine/osm';
 import { placesOf } from '../site/src/engine/places';
 import { Planner } from '../site/src/engine/planner';
@@ -21,7 +21,7 @@ for (const name of names) {
     const weather = await hottestDay(campus.center.lat, campus.center.lon);
     const loaded = performance.now();
     const ground = rasterize(campus, simCell(campus));
-    const backdrop = backdropOf(ground, weather, campus.center.lat, campus.center.lon, { blocks: campus.blocks, trees: campus.trees, sails: [] });
+    const backdrop = backdropOf(ground, weather, campus.center.lat, campus.center.lon, fixedOf(campus));
     const day = simulate(ground, weather, backdrop);
     const peak = hottestMinute(day, ground);
     const result = tally(day, ground, peak);

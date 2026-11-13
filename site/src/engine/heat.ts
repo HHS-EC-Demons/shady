@@ -55,11 +55,15 @@ export function backdropOf(ground: Ground, weather: Weather, lat: number, lon: n
 
 const NOTHING: Obstacles = { blocks: [], trees: [], sails: [] };
 
+export function fixedOf(campus: Campus): Obstacles {
+  return { blocks: campus.blocks, trees: campus.trees, sails: [], covers: campus.covers ?? [] };
+}
+
 export function simulate(ground: Ground, weather: Weather, backdrop: Backdrop, added: Obstacles = NOTHING): HeatDay {
   const grid = ground.grid;
   const cells = grid.cols * grid.rows;
   const temps = new Uint8Array(cells * STEPS);
-  const empty = added.blocks.length + added.trees.length + added.sails.length === 0;
+  const empty = added.blocks.length + added.trees.length + added.sails.length + (added.covers?.length ?? 0) === 0;
   const lightAll = empty ? backdrop.light : backdrop.light.slice();
   const air = new Float32Array(STEPS);
   const now = new Float32Array(cells);
@@ -93,7 +97,7 @@ export type Opened = { ground: Ground; backdrop: Backdrop; bare: HeatDay; peak: 
 
 export function prepareCampus(campus: Campus, weather: Weather): { ground: Ground; backdrop: Backdrop } {
   const ground = rasterize(campus, simCell(campus));
-  const backdrop = backdropOf(ground, weather, campus.center.lat, campus.center.lon, { blocks: campus.blocks, trees: campus.trees, sails: [] });
+  const backdrop = backdropOf(ground, weather, campus.center.lat, campus.center.lon, fixedOf(campus));
   return { ground, backdrop };
 }
 
