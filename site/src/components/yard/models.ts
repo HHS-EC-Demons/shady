@@ -1,5 +1,7 @@
 import * as THREE from 'three';
 import { mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import type { RoofShape } from '@/engine/campus';
+import { roofRise } from '@/engine/detail';
 import { roofUnits, type RoofUnit } from '@/engine/roof';
 
 type Random = () => number;
@@ -375,6 +377,43 @@ function buildCrown(shape: Shape): THREE.BufferGeometry {
   return crown;
 }
 
+let cone: THREE.BufferGeometry | null = null;
+
+export function buildCone(): THREE.BufferGeometry {
+  if (cone) return cone.clone();
+  const builder = new Builder();
+  const tiers: [number, number, number, number][] = [
+    [0, 0.52, 1, 0.34],
+    [0.3, 0.78, 0.76, 0.22],
+    [0.56, 1, 0.52, 0],
+  ];
+  const sides = 8;
+  const shade = new THREE.Color();
+  tiers.forEach(([low, high, wide, narrow], tier) => {
+    const color = (y: number, angle: number) => {
+      const lit = 0.3 + 0.45 * y + 0.12 * Math.cos(angle - 0.8) + 0.05 * tier;
+      return lit < 0.5 ? blend(QUIET.deep, QUIET.mid, lit / 0.5, shade).clone() : blend(QUIET.mid, QUIET.sun, (lit - 0.5) / 0.5, shade).clone();
+    };
+    const bottom: number[] = [];
+    const top: number[] = [];
+    for (let side = 0; side < sides; side += 1) {
+      const angle = ((side + tier * 0.5) / sides) * Math.PI * 2;
+      bottom.push(builder.vertex(Math.cos(angle) * wide, low, Math.sin(angle) * wide, color(low, angle)));
+      if (narrow > 0) top.push(builder.vertex(Math.cos(angle) * narrow, high, Math.sin(angle) * narrow, color(high, angle)));
+    }
+    const apex = narrow > 0 ? -1 : builder.vertex(0, high, 0, color(high, 0));
+    const centre = builder.vertex(0, low + 0.02, 0, color(low, Math.PI));
+    for (let side = 0; side < sides; side += 1) {
+      const next = (side + 1) % sides;
+      if (apex >= 0) builder.triangle(bottom[side], apex, bottom[next]);
+      else builder.quad(bottom[side], top[side], top[next], bottom[next]);
+      builder.triangle(bottom[side], bottom[next], centre);
+    }
+  });
+  cone = builder.geometry();
+  return cone.clone();
+}
+
 type Ring = { at: THREE.Vector3; radius: (angle: number) => number; color: (angle: number) => THREE.Color };
 
 function sweep(builder: Builder, rings: Ring[], sides: number, tip: THREE.Vector3 | null, tipColor: THREE.Color | null, level = false): void {
@@ -625,7 +664,7 @@ export function buildRoofUnits(
 }
 
 export type Flat = [number, number][];
-export type BlockForm = 'parapet' | 'chamfer' | 'hip' | 'flat';
+export type BlockForm = 'parapet' | 'chamfer' | 'hip' | 'flat' | 'gable' | 'skillion' | 'pyramid' | 'dome' | 'stand';
 export type BlockModel = { geometry: THREE.BufferGeometry; roof: number; form: BlockForm };
 
 type Spot = [number, number, number];
@@ -726,26 +765,29 @@ export function insetRing(ring: Flat, distance: number): Flat | null {
   return simpleRing(out) ? out : null;
 }
 
-function lift(point: [number, number], y: number): Spot {
+export function lift(point: [number, number], y: number): Spot {
   return [point[0], y, -point[1]];
 }
 
-function outward(a: [number, number], b: [number, number]): Spot {
+export function outward(a: [number, number], b: [number, number]): Spot {
   const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
   return [(b[1] - a[1]) / length, 0, (b[0] - a[0]) / length];
 }
 
-class Shell {
+export class Shell {
   positions: number[] = [];
   normals: number[] = [];
   colors: number[] = [];
   indices: number[] = [];
+  storeys: number[] = [];
+  storey = 0;
 
   constructor(readonly paint: boolean) {}
 
-  private vertex(point: Spot, normal: Spot, color: THREE.Color | null): number {
+  vertex(point: Spot, normal: Spot, color: THREE.Color | null): number {
     this.positions.push(point[0], point[1], point[2]);
     this.normals.push(normal[0], normal[1], normal[2]);
+    this.storeys.push(this.storey);
     if (this.paint) this.colors.push(color?.r ?? 1, color?.g ?? 1, color?.b ?? 1);
     return this.positions.length / 3 - 1;
   }
@@ -806,10 +848,41 @@ class Shell {
     }
   }
 
+  post(x: number, z: number, low: number, high: number, radius: number, sides: number, color: THREE.Color | null): void {
+    const start = this.positions.length / 3;
+    for (let side = 0; side < sides; side += 1) {
+      const angle = ((side + 0.5) / sides) * Math.PI * 2;
+      const nx = Math.cos(angle);
+      const nz = Math.sin(angle);
+      this.vertex([x + nx * radius, low, z + nz * radius], [nx, 0, nz], color);
+      this.vertex([x + nx * radius, high, z + nz * radius], [nx, 0, nz], color);
+    }
+    for (let side = 0; side < sides; side += 1) {
+      const next = (side + 1) % sides;
+      const a = start + side * 2;
+      const b = start + next * 2;
+      this.indices.push(a, a + 1, b + 1, a, b + 1, b);
+    }
+  }
+
+  flat(ring: Flat, y: number, color: THREE.Color | null, down = false): void {
+    if (ring.length < 3) return;
+    const contour = ring.map(([x, z]) => new THREE.Vector2(x, z));
+    const triangles = THREE.ShapeUtils.triangulateShape(contour, []);
+    const start = this.positions.length / 3;
+    for (const point of ring) this.vertex(lift(point, y), down ? DOWN : UP, color);
+    for (const [a, b, c] of triangles) {
+      const up = turn(ring[a], ring[b], ring[c]) >= 0;
+      if (up !== down) this.indices.push(start + a, start + b, start + c);
+      else this.indices.push(start + a, start + c, start + b);
+    }
+  }
+
   geometry(): THREE.BufferGeometry {
     const geometry = new THREE.BufferGeometry();
     geometry.setAttribute('position', new THREE.Float32BufferAttribute(this.positions, 3));
     geometry.setAttribute('normal', new THREE.Float32BufferAttribute(this.normals, 3));
+    geometry.setAttribute('aWall', new THREE.Float32BufferAttribute(this.storeys, 1));
     if (this.paint) geometry.setAttribute('color', new THREE.Float32BufferAttribute(this.colors, 3));
     geometry.setIndex(this.indices);
     geometry.computeBoundingSphere();
@@ -833,40 +906,280 @@ function centroid(ring: Flat): [number, number] {
   return [x / (3 * twice), y / (3 * twice)];
 }
 
-function hipRoof(shell: Shell, ring: Flat, height: number, wall: THREE.Color | null): boolean {
+function warm(wall: THREE.Color | null): THREE.Color | null {
+  return wall ? new THREE.Color(wall.r * ROOF_WARM[0], wall.g * ROOF_WARM[1], wall.b * ROOF_WARM[2]) : null;
+}
+
+function hipRoof(shell: Shell, ring: Flat, low: number, height: number, rise: number, peak: number, wall: THREE.Color | null, roof: THREE.Color | null): boolean {
   const eave = insetRing(ring, -EAVE);
   if (!eave) return false;
   const middle = centroid(ring);
   for (let i = 0; i < ring.length; i += 1) {
     if (turn(ring[i], ring[(i + 1) % ring.length], middle) <= 1e-6) return false;
   }
-  const top: Flat = ring.map(([x, y]) => [middle[0] + (x - middle[0]) * PEAK, middle[1] + (y - middle[1]) * PEAK]);
-  const roof = wall ? new THREE.Color(wall.r * ROOF_WARM[0], wall.g * ROOF_WARM[1], wall.b * ROOF_WARM[2]) : null;
-  shell.walls(ring, 0, height, wall);
+  const top: Flat = ring.map(([x, y]) => [middle[0] + (x - middle[0]) * peak, middle[1] + (y - middle[1]) * peak]);
+  shell.walls(ring, low, height, wall);
   shell.band(ring, eave, height, roof, DOWN);
   shell.walls(eave, height, height + FASCIA, roof);
   for (let i = 0; i < ring.length; i += 1) {
     const j = (i + 1) % ring.length;
     const side = outward(eave[i], eave[j]);
-    shell.face([lift(eave[i], height + FASCIA), lift(eave[j], height + FASCIA), lift(top[j], height + RISE), lift(top[i], height + RISE)], [side[0], 1, side[2]], roof);
+    if (peak > 0) shell.face([lift(eave[i], height + FASCIA), lift(eave[j], height + FASCIA), lift(top[j], height + rise), lift(top[i], height + rise)], [side[0], 1, side[2]], roof);
+    else shell.face([lift(eave[i], height + FASCIA), lift(eave[j], height + FASCIA), lift(middle, height + rise)], [side[0], 1, side[2]], roof);
   }
-  shell.cap(top, height + RISE, roof);
+  if (peak > 0) shell.cap(top, height + rise, roof);
   return true;
 }
 
-export function buildBlock(footprint: Flat, height: number, options: { home?: boolean; tint?: THREE.Color } = {}): BlockModel {
+type Box2 = { cx: number; cy: number; ux: number; uy: number; long: number; short: number };
+
+function boxOf2(ring: Flat): Box2 {
+  let best = 0;
+  let ux = 1;
+  let uy = 0;
+  for (let i = 0; i < ring.length; i += 1) {
+    const [ax, ay] = ring[i];
+    const [bx, by] = ring[(i + 1) % ring.length];
+    const length = Math.hypot(bx - ax, by - ay);
+    if (length > best) {
+      best = length;
+      ux = (bx - ax) / length;
+      uy = (by - ay) / length;
+    }
+  }
+  let lowU = Infinity;
+  let highU = -Infinity;
+  let lowV = Infinity;
+  let highV = -Infinity;
+  for (const [x, y] of ring) {
+    const u = x * ux + y * uy;
+    const v = -x * uy + y * ux;
+    lowU = Math.min(lowU, u);
+    highU = Math.max(highU, u);
+    lowV = Math.min(lowV, v);
+    highV = Math.max(highV, v);
+  }
+  const midU = (lowU + highU) / 2;
+  const midV = (lowV + highV) / 2;
+  return { cx: midU * ux - midV * uy, cy: midU * uy + midV * ux, ux, uy, long: highU - lowU, short: highV - lowV };
+}
+
+function rectangular(ring: Flat, box: Box2, fill: number): boolean {
+  return ring.length >= 4 && ring.length <= 8 && Math.abs(ringArea(ring)) >= box.long * box.short * fill;
+}
+
+type Axes = { cx: number; cy: number; ax: number; ay: number; bx: number; by: number; p: number; q: number };
+
+function axesOf(box: Box2, across: boolean): Axes {
+  if (!across) return { cx: box.cx, cy: box.cy, ax: box.ux, ay: box.uy, bx: -box.uy, by: box.ux, p: box.long / 2, q: box.short / 2 };
+  return { cx: box.cx, cy: box.cy, ax: -box.uy, ay: box.ux, bx: -box.ux, by: -box.uy, p: box.short / 2, q: box.long / 2 };
+}
+
+function point2(axes: Axes, a: number, b: number): [number, number] {
+  return [axes.cx + axes.ax * a + axes.bx * b, axes.cy + axes.ay * a + axes.by * b];
+}
+
+function slab(shell: Shell, top: Spot[], color: THREE.Color | null, up: Spot): void {
+  const under = top.map((point): Spot => [point[0], point[1] - FASCIA, point[2]]);
+  shell.face(top, up, color);
+  shell.face(under, [-up[0], -up[1], -up[2]], color);
+  for (let i = 0; i < top.length; i += 1) {
+    const j = (i + 1) % top.length;
+    const mx = (top[i][0] + top[j][0]) / 2;
+    const mz = (top[i][2] + top[j][2]) / 2;
+    const cx = top.reduce((sum, point) => sum + point[0], 0) / top.length;
+    const cz = top.reduce((sum, point) => sum + point[2], 0) / top.length;
+    shell.face([top[i], top[j], under[j], under[i]], [mx - cx, 0, mz - cz], color);
+  }
+}
+
+function gableRoof(shell: Shell, axes: Axes, low: number, eave: number, rise: number, wall: THREE.Color | null, roof: THREE.Color | null, hip: boolean): void {
+  const { p, q } = axes;
+  const at = (a: number, b: number, y: number): Spot => lift(point2(axes, a, b), y);
+  const origin = at(0, 0, 0);
+  const dir = (a: number, b: number): Spot => {
+    const point = at(a, b, 0);
+    return [point[0] - origin[0], 0, point[2] - origin[2]];
+  };
+  const ridge = hip ? Math.max(0, p - q) : p;
+  for (const side of [-1, 1]) shell.face([at(-p, side * q, low), at(p, side * q, low), at(p, side * q, eave), at(-p, side * q, eave)], dir(0, side), wall);
+  for (const end of [-1, 1]) {
+    if (hip) shell.face([at(end * p, -q, low), at(end * p, q, low), at(end * p, q, eave), at(end * p, -q, eave)], dir(end, 0), wall);
+    else shell.face([at(end * p, -q, low), at(end * p, q, low), at(end * p, q, eave), at(end * p, 0, eave + rise), at(end * p, -q, eave)], dir(end, 0), wall);
+  }
+  const over = EAVE;
+  const drop = (rise * over) / Math.max(q, 0.5);
+  const top = eave + rise;
+  const g = hip ? over : over * 0.7;
+  for (const side of [-1, 1]) {
+    const up = dir(0, side * 0.5);
+    if (hip) slab(shell, [at(-ridge, 0, top), at(ridge, 0, top), at(p + over, side * (q + over), eave - drop), at(-p - over, side * (q + over), eave - drop)], roof, [up[0], 1, up[2]]);
+    else slab(shell, [at(-p - g, 0, top), at(p + g, 0, top), at(p + g, side * (q + over), eave - drop), at(-p - g, side * (q + over), eave - drop)], roof, [up[0], 1, up[2]]);
+  }
+  if (hip) {
+    for (const end of [-1, 1]) {
+      const up = dir(end * 0.5, 0);
+      slab(shell, [at(end * ridge, 0, top), at(end * (p + over), q + over, eave - drop), at(end * (p + over), -q - over, eave - drop)], roof, [up[0], 1, up[2]]);
+    }
+  }
+}
+
+function skillionRoof(shell: Shell, axes: Axes, low: number, eave: number, rise: number, wall: THREE.Color | null, roof: THREE.Color | null): void {
+  const { p, q } = axes;
+  const at = (a: number, b: number, y: number): Spot => lift(point2(axes, a, b), y);
+  const origin = at(0, 0, 0);
+  const dir = (a: number, b: number): Spot => {
+    const point = at(a, b, 0);
+    return [point[0] - origin[0], 0, point[2] - origin[2]];
+  };
+  const height = (b: number) => eave + (rise * (b + q)) / (2 * q);
+  for (const side of [-1, 1]) shell.face([at(-p, side * q, low), at(p, side * q, low), at(p, side * q, height(side * q)), at(-p, side * q, height(side * q))], dir(0, side), wall);
+  for (const end of [-1, 1]) shell.face([at(end * p, -q, low), at(end * p, q, low), at(end * p, q, height(q)), at(end * p, -q, height(-q))], dir(end, 0), wall);
+  const over = EAVE;
+  const slope = rise / (2 * q);
+  const up = dir(0, -slope);
+  slab(shell, [at(-p - over, -q - over, height(-q) - slope * over + FASCIA), at(p + over, -q - over, height(-q) - slope * over + FASCIA), at(p + over, q + over, height(q) + slope * over + FASCIA), at(-p - over, q + over, height(q) + slope * over + FASCIA)], roof, [up[0], 1, up[2]]);
+}
+
+function domeRoof(shell: Shell, ring: Flat, low: number, eave: number, rise: number, wall: THREE.Color | null, roof: THREE.Color | null): boolean {
+  const middle = centroid(ring);
+  for (let i = 0; i < ring.length; i += 1) {
+    if (turn(ring[i], ring[(i + 1) % ring.length], middle) <= 1e-6) return false;
+  }
+  shell.walls(ring, low, eave, wall);
+  const steps = 6;
+  let last = ring;
+  let lastY = eave;
+  for (let step = 1; step <= steps; step += 1) {
+    const angle = (step / steps) * (Math.PI / 2) * 0.92;
+    const scale = Math.cos(angle);
+    const y = eave + rise * Math.sin(angle) / Math.sin((Math.PI / 2) * 0.92);
+    const next: Flat = ring.map(([x, z]) => [middle[0] + (x - middle[0]) * scale, middle[1] + (z - middle[1]) * scale]);
+    for (let i = 0; i < ring.length; i += 1) {
+      const j = (i + 1) % ring.length;
+      const side = outward(last[i], last[j]);
+      shell.face([lift(last[i], lastY), lift(last[j], lastY), lift(next[j], y), lift(next[i], y)], [side[0], 1, side[2]], roof);
+    }
+    last = next;
+    lastY = y;
+  }
+  shell.cap(last, lastY, roof);
+  return true;
+}
+
+function standBlock(shell: Shell, box: Box2, low: number, height: number, away: [number, number], wall: THREE.Color | null): void {
+  const alongShort = Math.abs(away[0] * -box.uy + away[1] * box.ux) >= Math.abs(away[0] * box.ux + away[1] * box.uy);
+  const axes: Axes = alongShort
+    ? { cx: box.cx, cy: box.cy, ax: box.ux, ay: box.uy, bx: -box.uy, by: box.ux, p: box.long / 2, q: box.short / 2 }
+    : { cx: box.cx, cy: box.cy, ax: -box.uy, ay: box.ux, bx: box.ux, by: box.uy, p: box.short / 2, q: box.long / 2 };
+  const sign = away[0] * axes.bx + away[1] * axes.by >= 0 ? 1 : -1;
+  const at = (a: number, b: number, y: number): Spot => lift(point2(axes, a, b * sign), y);
+  const { p, q } = axes;
+  const tall = height - low;
+  const rows = Math.max(3, Math.min(40, Math.round((2 * q) / 0.85)));
+  const depth = (2 * q) / rows;
+  const front = Math.min(0.6, tall / rows);
+  const profile: [number, number][] = [[-q, low]];
+  for (let row = 0; row < rows; row += 1) {
+    const y = low + front + ((tall - front) * row) / Math.max(1, rows - 1);
+    profile.push([-q + row * depth, y], [-q + (row + 1) * depth, y]);
+  }
+  profile.push([q, low]);
+  const origin = at(0, 0, 0);
+  const toward = (b: number): Spot => {
+    const point = at(0, b, 0);
+    return [point[0] - origin[0], 0, point[2] - origin[2]];
+  };
+  for (let i = 0; i + 1 < profile.length; i += 1) {
+    const [b0, y0] = profile[i];
+    const [b1, y1] = profile[i + 1];
+    const facing: Spot = Math.abs(y1 - y0) < 1e-6 ? [0, 1, 0] : toward(y1 > y0 ? -1 : 1);
+    shell.face([at(-p, b0, y0), at(p, b0, y0), at(p, b1, y1), at(-p, b1, y1)], facing, wall);
+  }
+  for (const end of [-1, 1]) {
+    const contour = profile.map(([b, y]) => new THREE.Vector2(b, y));
+    const triangles = THREE.ShapeUtils.triangulateShape(contour, []);
+    const out = at(end, 0, 0);
+    const middle = at(0, 0, 0);
+    const want: Spot = [out[0] - middle[0], 0, out[2] - middle[2]];
+    for (const [a, b, c] of triangles) shell.face([at(end * p, profile[a][0], profile[a][1]), at(end * p, profile[b][0], profile[b][1]), at(end * p, profile[c][0], profile[c][1])], want, wall);
+  }
+  const rail = profile[profile.length - 2][1];
+  const back = q - 0.06;
+  const rim: Flat = [point2(axes, -p, back * sign), point2(axes, p, back * sign), point2(axes, p, q * sign), point2(axes, -p, q * sign)];
+  const railRing = ringArea(rim) < 0 ? rim.reverse() : rim;
+  shell.walls(railRing, rail, rail + 1.05, wall);
+  shell.cap(railRing, rail + 1.05, wall);
+}
+
+export type BlockLook = {
+  home?: boolean;
+  tint?: THREE.Color;
+  top?: THREE.Color;
+  min?: number;
+  roof?: RoofShape;
+  rise?: number;
+  across?: boolean;
+  slope?: number;
+  levels?: number;
+  stand?: [number, number];
+};
+
+export function buildBlock(footprint: Flat, height: number, options: BlockLook = {}): BlockModel {
   const wall = options.tint ?? null;
-  const shell = new Shell(wall !== null);
+  const roofTone = options.top ?? warm(wall);
+  const shell = new Shell(wall !== null || options.top !== undefined);
   const ring = cleanRing(footprint);
   const tall = Math.max(height, 0.1);
+  const low = Math.min(Math.max(0, options.min ?? 0), tall - 0.1);
   if (ring.length < 3) return { geometry: shell.geometry(), roof: tall, form: 'flat' };
-  if (!options.home && ringArea(ring) < HIP_AREA && ring.length <= HIP_CORNERS && hipRoof(shell, ring, tall, wall)) {
+  const box = boxOf2(ring);
+  if (options.stand && rectangular(ring, box, 0.8) && box.short > 2) {
+    shell.storey = -1;
+    standBlock(shell, box, low, tall, options.stand, wall);
+    return { geometry: shell.geometry(), roof: tall, form: 'stand' };
+  }
+  if (low > 0.05) shell.flat(ring, low, wall, true);
+  const shape = options.roof;
+  if (shape && shape !== 'flat') {
+    const rise = options.rise ?? roofRise(shape, ring);
+    const eave = options.rise !== undefined ? tall - rise : tall;
+    if (eave - low > 0.5 && rise > 0.2) {
+      shell.storey = options.levels ? (eave - 0) / options.levels : 0;
+      const top = options.top ?? warm(wall) ?? null;
+      if ((shape === 'gabled' || shape === 'skillion') && rectangular(ring, box, 0.9)) {
+        if (shape === 'gabled') gableRoof(shell, axesOf(box, options.across === true), low, eave, rise, wall, top, false);
+        else skillionRoof(shell, skillionAxes(box, options.slope), low, eave, rise, wall, top);
+        return { geometry: shell.geometry(), roof: eave + rise, form: shape === 'gabled' ? 'gable' : 'skillion' };
+      }
+      if (shape === 'hipped' && rectangular(ring, box, 0.9)) {
+        gableRoof(shell, axesOf(box, false), low, eave, rise, wall, top, true);
+        return { geometry: shell.geometry(), roof: eave + rise, form: 'hip' };
+      }
+      if ((shape === 'hipped' || shape === 'pyramidal') && ring.length <= HIP_CORNERS && hipRoof(shell, ring, low, eave, rise, shape === 'pyramidal' ? 0 : PEAK, wall, top)) {
+        return { geometry: shell.geometry(), roof: eave + rise, form: shape === 'pyramidal' ? 'pyramid' : 'hip' };
+      }
+      if (shape === 'dome' && ring.length >= 3 && domeRoof(shell, ring, low, eave, rise, wall, top)) {
+        return { geometry: shell.geometry(), roof: eave + rise, form: 'dome' };
+      }
+      shell.positions.length = 0;
+      shell.normals.length = 0;
+      shell.colors.length = 0;
+      shell.indices.length = 0;
+      shell.storeys.length = 0;
+      if (low > 0.05) shell.flat(ring, low, wall, true);
+    }
+  }
+  shell.storey = options.levels ? tall / options.levels : 0;
+  if (!shape && !options.home && low < 0.05 && ringArea(ring) < HIP_AREA && ring.length <= HIP_CORNERS && hipRoof(shell, ring, 0, tall, RISE, PEAK, wall, roofTone)) {
     return { geometry: shell.geometry(), roof: tall + RISE, form: 'hip' };
   }
-  const bevel = tall > CHAMFER * 3 ? insetRing(ring, CHAMFER) : null;
-  const rim = options.home && bevel && tall > CHAMFER + RECESS + 0.5 ? insetRing(ring, RIM) : null;
+  const roofColor = options.top ?? wall;
+  const span = tall - low;
+  const bevel = span > CHAMFER * 3 ? insetRing(ring, CHAMFER) : null;
+  const rim = options.home && bevel && span > CHAMFER + RECESS + 0.5 ? insetRing(ring, RIM) : null;
   if (bevel && rim) {
-    shell.walls(ring, 0, tall - CHAMFER, wall);
+    shell.walls(ring, low, tall - CHAMFER, wall);
     shell.bevel(ring, bevel, tall - CHAMFER, tall, wall);
     shell.band(bevel, rim, tall, wall, UP);
     for (let i = 0; i < rim.length; i += 1) {
@@ -874,21 +1187,34 @@ export function buildBlock(footprint: Flat, height: number, options: { home?: bo
       const side = outward(rim[i], rim[j]);
       shell.face([lift(rim[i], tall), lift(rim[j], tall), lift(rim[j], tall - RECESS), lift(rim[i], tall - RECESS)], [-side[0], 0, -side[2]], wall);
     }
-    shell.cap(rim, tall - RECESS, wall);
+    shell.cap(rim, tall - RECESS, roofColor);
     return { geometry: shell.geometry(), roof: tall - RECESS, form: 'parapet' };
   }
   if (bevel) {
-    shell.walls(ring, 0, tall - CHAMFER, wall);
+    shell.walls(ring, low, tall - CHAMFER, wall);
     shell.bevel(ring, bevel, tall - CHAMFER, tall, wall);
-    shell.cap(bevel, tall, wall);
+    shell.cap(bevel, tall, roofColor);
     return { geometry: shell.geometry(), roof: tall, form: 'chamfer' };
   }
-  shell.walls(ring, 0, tall, wall);
-  shell.cap(ring, tall, wall);
+  shell.walls(ring, low, tall, wall);
+  shell.cap(ring, tall, roofColor);
   return { geometry: shell.geometry(), roof: tall, form: 'flat' };
 }
 
+function skillionAxes(box: Box2, slope: number | undefined): Axes {
+  const short: Axes = { cx: box.cx, cy: box.cy, ax: box.ux, ay: box.uy, bx: -box.uy, by: box.ux, p: box.long / 2, q: box.short / 2 };
+  if (slope === undefined) return short;
+  const downX = Math.sin((slope * Math.PI) / 180);
+  const downY = Math.cos((slope * Math.PI) / 180);
+  const alongLong = Math.abs(downX * box.ux + downY * box.uy) > Math.abs(downX * -box.uy + downY * box.ux);
+  const axes: Axes = alongLong ? { cx: box.cx, cy: box.cy, ax: -box.uy, ay: box.ux, bx: box.ux, by: box.uy, p: box.short / 2, q: box.long / 2 } : short;
+  const uphill = -(downX * axes.bx + downY * axes.by);
+  return uphill >= 0 ? axes : { ...axes, ax: -axes.ax, ay: -axes.ay, bx: -axes.bx, by: -axes.by };
+}
+
 const WALL_VERTEX_HEAD = `#include <common>
+attribute float aWall;
+varying float vWallStorey;
 varying vec3 vWallPos;
 varying vec3 vWallNormal;
 varying float vWallLift;
@@ -910,10 +1236,12 @@ wallWorld = modelMatrix * wallWorld;
 vWallPos = wallWorld.xyz;
 vWallNormal = normalize( mat3( modelMatrix ) * wallNormal );
 vWallHigh = transformed.y;
+vWallStorey = aWall;
 vWallRaised = step( 0.05, transformed.y );
 vWallLift = transformed.y * vWallRaised;`;
 
 const WALL_FRAGMENT_HEAD = `#include <common>
+varying float vWallStorey;
 varying vec3 vWallPos;
 varying vec3 vWallNormal;
 varying float vWallLift;
@@ -944,12 +1272,14 @@ float wallTop = vWallLift / max( vWallRaised, 1e-4 );
 float wallStepU = max( fwidth( wallAlong ), 1e-4 );
 float wallStepY = max( fwidth( wallHigh ), 1e-4 );
 float wallPx = max( wallStepU, wallStepY );
-float wallFade = wallSide * ( 1.0 - smoothstep( 0.16, 0.45, wallPx ) );
+float wallPlain = step( vWallStorey, -0.5 );
+float wallFade = wallSide * ( 1.0 - smoothstep( 0.16, 0.45, wallPx ) ) * ( 1.0 - wallPlain );
 float wallFine = 1.0 - smoothstep( 0.025, 0.07, wallPx );
-float wallStorey = 4.2;
+float wallStorey = vWallStorey > 2.4 ? vWallStorey : 4.2;
+float wallScale = 4.2 / wallStorey;
 float wallLevel = floor( wallHigh / wallStorey );
-float wallIn = wallHigh - wallLevel * wallStorey;
-float wallRoom = step( wallLevel * wallStorey + 3.3, wallTop );
+float wallIn = ( wallHigh - wallLevel * wallStorey ) * wallScale;
+float wallRoom = step( wallLevel * wallStorey + 3.3 / wallScale, wallTop );
 float wallBand = smoothstep( 1.0 - wallStepY, 1.0 + wallStepY, wallIn ) * ( 1.0 - smoothstep( 2.7 - wallStepY, 2.7 + wallStepY, wallIn ) );
 float wallBay = 3.6;
 float wallOff = abs( fract( wallAlong / wallBay ) - 0.5 ) * wallBay;
@@ -962,7 +1292,7 @@ float wallSill = ( 1.0 - smoothstep( 0.06 - wallStepY, 0.06 + wallStepY, abs( wa
 float wallBase = ( 1.0 - smoothstep( 0.5 - wallStepY, 0.5 + wallStepY, wallHigh ) ) * wallFade;
 float wallJointW = max( 0.035, wallPx * 0.6 );
 float wallJointV = 1.0 - smoothstep( wallJointW - wallStepU, wallJointW + wallStepU, wallBay * 0.5 - wallOff );
-float wallJointH = ( 1.0 - smoothstep( wallJointW - wallStepY, wallJointW + wallStepY, min( wallIn, wallStorey - wallIn ) ) ) * step( 0.6, wallHigh );
+float wallJointH = ( 1.0 - smoothstep( wallJointW - wallStepY, wallJointW + wallStepY, min( wallIn, 4.2 - wallIn ) ) ) * step( 0.6, wallHigh );
 float wallJoint = max( wallJointV, wallJointH ) * wallFade * ( 1.0 - wallGlass ) * clamp( 0.05 / wallPx, 0.0, 1.0 );
 vec2 wallGrit = vWallPos.xz / 0.35;
 float wallSpeck = wallNoise( wallGrit ) * 0.65 + wallNoise( wallGrit * 0.37 + 17.0 ) * 0.35;
@@ -989,7 +1319,7 @@ export function enhanceWalls(material: THREE.MeshStandardMaterial): void {
       .replace('#include <color_fragment>', WALL_FRAGMENT_BODY)
       .replace('#include <roughnessmap_fragment>', WALL_ROUGHNESS);
   };
-  material.customProgramCacheKey = () => 'shady-walls-4';
+  material.customProgramCacheKey = () => 'shady-walls-5';
   material.needsUpdate = true;
 }
 
