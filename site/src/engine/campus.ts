@@ -85,6 +85,10 @@ export function outdated(campus: Campus): boolean {
   return (campus.version ?? 0) < CAMPUS_VERSION;
 }
 
+export function mapped(campus: Campus): boolean {
+  return campus.blocks.some((block) => block.home) || campus.patches.length > 0;
+}
+
 export type Ground = {
   grid: Grid;
   surface: Uint8Array;
