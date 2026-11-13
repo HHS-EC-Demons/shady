@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CROP_SIZE, POINT_SIZE, areaOf, clipRing, plannedBounds, ringOf, spanOf, squareAround, squareArea, type LatLon } from './area';
+import { CAMPUS_VERSION } from './campus';
 import { KEEP_PLACES, PLACE_LIFE, fresh, placeKey, prune, samePlace } from './memory';
 import { insideRing, ringArea, type Ring } from './geometry';
 import { MOST_FOUND, buildCampus, rankPlaces, tidy, withHoles, type Element, type PhotonFeature } from './osm';
@@ -141,9 +142,12 @@ describe('map answers', () => {
       { type: 'way', id: 2, tags: { highway: 'service' }, geometry: [{ lat: 2, lon: 2 }, { lat: 3, lon: 3 }] },
       { type: 'way', id: 1, tags: { highway: 'service' }, geometry: [{ lat: -1, lon: 0.5 }, { lat: 2, lon: 0.5 }] },
       { type: 'node', id: 5, tags: { natural: 'tree' }, lat: 0.2, lon: 0.2 },
-      { type: 'node', id: 6, tags: { amenity: 'bench' }, lat: 0.2, lon: 0.2 },
+      { type: 'node', id: 6, tags: { amenity: 'cafe' }, lat: 0.2, lon: 0.2 },
+      { type: 'node', id: 7, tags: { amenity: 'bench' }, lat: 0.3, lon: 0.3 },
+      { type: 'way', id: 8, tags: { barrier: 'fence' }, geometry: [{ lat: 0.5, lon: 0.5 }, { lat: 0.6, lon: 0.6 }] },
+      { type: 'node', id: 10, tags: { barrier: 'fence' }, lat: 0.3, lon: 0.3 },
     ];
-    expect(tidy(elements, box).map((element) => `${element.type}${element.id}`)).toEqual(['node5', 'way1', 'way9']);
+    expect(tidy(elements, box).map((element) => `${element.type}${element.id}`)).toEqual(['node5', 'node7', 'way1', 'way8', 'way9']);
   });
 });
 
@@ -184,6 +188,7 @@ describe('buildings with holes', () => {
       },
     ]);
     expect(campus.blocks).toHaveLength(1);
+    expect(campus.version).toBe(CAMPUS_VERSION);
     const ring = campus.blocks[0].ring;
     expect(ringArea(ring)).toBeCloseTo(200 * 160 - 120 * 80, -2);
     expect(insideRing(ring, 0, 0)).toBe(false);

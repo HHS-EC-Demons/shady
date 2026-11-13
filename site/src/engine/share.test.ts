@@ -97,6 +97,29 @@ describe('share links', () => {
     expect(bodyOf(await encodePlan(full)).c).toBeUndefined();
   });
 
+  it('round trips field corrections by position in an optional key', async () => {
+    const spots: Plan['spots'] = [
+      { at: [-128.5, -19], from: 'grass', to: 'soil' },
+      { at: [55.7, 40.1], from: 'turf', to: 'grass' },
+    ];
+    const plan: Plan = { ...full, surfaces: [], spots };
+    expect(await decodePlan(await encodePlan(plan))).toEqual(plan);
+    const body = bodyOf(await encodePlan(plan));
+    expect(body.g).toEqual([-1285, -190, 0, 6, 557, 401, 3, 0]);
+    expect(body.f).toBeUndefined();
+  });
+
+  it('returns null for a bad field correction list', async () => {
+    expect(await decodePlan(plain({ ...base, g: [1, 2, 0] }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, g: [1.5, 2, 0, 6] }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, g: [1, 2, 0, 9] }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, g: [100001, 2, 0, 6] }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, g: '1,2,0,6' }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, g: [[1, 2, 0, 6]] }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, g: Array.from({ length: (LIMITS.fixes + 1) * 4 }, () => 0) }))).toBeNull();
+    expect(await decodePlan(plain({ ...base, g: [0, 0, 0, 6], h: Array.from({ length: LIMITS.fixes }, () => [1, 0, 20]) }))).toBeNull();
+  });
+
   it('returns null for a bad removed tree list', async () => {
     expect(await decodePlan(plain({ ...base, c: [1, 2, 3] }))).toBeNull();
     expect(await decodePlan(plain({ ...base, c: [1.5, 2] }))).toBeNull();

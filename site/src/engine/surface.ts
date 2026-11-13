@@ -2,15 +2,20 @@ import { ShapeUtils, Vector2 } from 'three';
 import { SURFACES, type Campus, type Patch, type Strip, type Surface } from './campus';
 import { insideRing, ringArea, ringDistance, type Point, type Ring } from './geometry';
 import type { Grid } from './raster';
+import { at as onFrame, frameOf, layoutOf } from './sports';
 
-const FIELD_SPORTS = ['Football field', 'Soccer field', 'Field'];
 const ROUND = 10;
 const LANES = 8;
 const LANE_HALF = 0.06;
-const FIELD_HALF = 0.07;
-const COURT_HALF = 0.04;
 const STALL_HALF = 0.05;
-const YARD_LINE = 9.144;
+const CENTRE_HALF = 0.06;
+const DASH = 3;
+const DASH_GAP = 9;
+const ZEBRA = 0.5;
+const POOL_LANE = 2.5;
+const WHITE = 1;
+const DARK = -1;
+const YELLOW = 2;
 const BAY = 18.3;
 const STALL = 2.75;
 const STALL_DEPTH = 5.5;
@@ -23,7 +28,7 @@ export const STRIDE = 16;
 const PROBE = 0.3;
 const BUCKET = 16;
 const BEND = Math.PI / 8;
-const RELIEF: Partial<Record<Surface, number>> = { grass: 1, soil: 1, concrete: 1, court: 1, track: 1, turf: 1, asphalt: -1 };
+const RELIEF: Partial<Record<Surface, number>> = { grass: 1, soil: 1, concrete: 1, court: 1, track: 1, turf: 1, asphalt: -1, water: -1 };
 
 type Box = { cx: number; cy: number; ux: number; uy: number; long: number; short: number };
 
@@ -215,7 +220,7 @@ export function groundValues(campus: Campus, grid: Grid, middle: Point): Float32
     for (const [x, y] of points) disc(x, y, radius);
   };
 
-  const ribbon = (points: Point[], closed: boolean, half: number) => {
+  const ribbon = (points: Point[], closed: boolean, half: number, ink = WHITE) => {
     const count = points.length;
     if (count < 2) return;
     const out = joins(points, closed);
@@ -226,16 +231,71 @@ export function groundValues(campus: Campus, grid: Grid, middle: Point): Float32
       const [bx, by] = points[j];
       const [px, py] = out[i];
       const [qx, qy] = out[j];
-      vertex(ax, ay, px, py, half, 1);
-      vertex(ax, ay, -px, -py, half, 1);
-      vertex(bx, by, -qx, -qy, half, 1);
-      vertex(ax, ay, px, py, half, 1);
-      vertex(bx, by, -qx, -qy, half, 1);
-      vertex(bx, by, qx, qy, half, 1);
+      vertex(ax, ay, px, py, half, ink);
+      vertex(ax, ay, -px, -py, half, ink);
+      vertex(bx, by, -qx, -qy, half, ink);
+      vertex(ax, ay, px, py, half, ink);
+      vertex(bx, by, -qx, -qy, half, ink);
+      vertex(bx, by, qx, qy, half, ink);
     }
   };
 
-  const segment = (from: Point, to: Point, half: number) => ribbon([from, to], false, half);
+  const segment = (from: Point, to: Point, half: number, ink = WHITE) => ribbon([from, to], false, half, ink);
+
+  const centre = (strip: Strip) => {
+    const { points } = tidy(strip.line);
+    const period = DASH + DASH_GAP;
+    let travel = DASH_GAP / 2;
+    for (let i = 0; i + 1 < points.length; i += 1) {
+      const [ax, ay] = points[i];
+      const [bx, by] = points[i + 1];
+      const length = Math.hypot(bx - ax, by - ay);
+      if (length < 1e-3) continue;
+      const ux = (bx - ax) / length;
+      const uy = (by - ay) / length;
+      for (let k = Math.floor(travel / period); k * period < travel + length; k += 1) {
+        const from = Math.max(0, k * period - travel);
+        const to = Math.min(length, k * period + DASH - travel);
+        if (to - from > 0.4) segment([ax + ux * from, ay + uy * from], [ax + ux * to, ay + uy * to], CENTRE_HALF, YELLOW);
+      }
+      travel += length;
+    }
+  };
+
+  const zebra = (strip: Strip) => {
+    const { points } = tidy(strip.line);
+    const reach = Math.max(strip.width, 3) / 2;
+    for (let i = 0; i + 1 < points.length; i += 1) {
+      const [ax, ay] = points[i];
+      const [bx, by] = points[i + 1];
+      const length = Math.hypot(bx - ax, by - ay);
+      if (length < 1.5) continue;
+      const ux = (bx - ax) / length;
+      const uy = (by - ay) / length;
+      const count = Math.floor((length - 0.6) / (ZEBRA * 2));
+      const start = (length - (count * ZEBRA * 2 - ZEBRA)) / 2 + ZEBRA / 2;
+      for (let k = 0; k < count; k += 1) {
+        const x = ax + ux * (start + k * ZEBRA * 2);
+        const y = ay + uy * (start + k * ZEBRA * 2);
+        segment([x - uy * reach, y + ux * reach], [x + uy * reach, y - ux * reach], ZEBRA / 2);
+      }
+    }
+  };
+
+  const pool = (patch: Patch) => {
+    const points = tidy(patch.ring).points;
+    if (points.length < 4) return;
+    const frame = frameOf(points);
+    if (frame.long < 20 || frame.short < POOL_LANE * 2 || ringArea(points) < frame.long * frame.short * 0.85) return;
+    const lanes = Math.floor(frame.short / POOL_LANE);
+    const first = (-(lanes - 1) / 2) * POOL_LANE;
+    const end = frame.long / 2 - 2;
+    for (let lane = 0; lane < lanes; lane += 1) {
+      const v = first + lane * POOL_LANE;
+      segment(onFrame(frame, -end, v), onFrame(frame, end, v), 0.13, DARK);
+      for (const u of [-end, end]) segment(onFrame(frame, u, v - 0.5), onFrame(frame, u, v + 0.5), 0.13, DARK);
+    }
+  };
 
   const lanes = (strip: Strip) => {
     const { points, closed } = tidy(strip.line);
@@ -246,35 +306,6 @@ export function groundValues(campus: Campus, grid: Grid, middle: Point): Float32
       const shifted = points.map(([x, y], index): Point => [x + out[index][0] * offset, y + out[index][1] * offset]);
       ribbon(shifted, closed, LANE_HALF);
     }
-  };
-
-  const field = (patch: Patch) => {
-    const box = boxAround(tidy(patch.ring).points);
-    const half = Math.min(box.long / 2 - 1, 54.86);
-    const side = Math.min(box.short / 2 - 1, 24.38);
-    if (half < 20 || side < 10) return;
-    ribbon([along(box, -half, -side), along(box, half, -side), along(box, half, side), along(box, -half, side)], true, FIELD_HALF);
-    const steps = Math.floor(half / YARD_LINE);
-    for (let step = -steps; step <= steps; step += 1) {
-      const u = step * YARD_LINE;
-      if (Math.abs(u) < half - 0.01) segment(along(box, u, -side), along(box, u, side), FIELD_HALF);
-    }
-  };
-
-  const court = (patch: Patch) => {
-    const box = boxAround(tidy(patch.ring).points);
-    const half = Math.min(11.89, box.long / 2 - 2.5);
-    const side = Math.min(5.49, box.short / 2 - 1.5);
-    if (half < 4 || side < 2) return;
-    const single = side * 0.75;
-    const service = half * 0.54;
-    ribbon([along(box, -half, -side), along(box, half, -side), along(box, half, side), along(box, -half, side)], true, COURT_HALF);
-    segment(along(box, 0, -side), along(box, 0, side), COURT_HALF);
-    segment(along(box, -half, -single), along(box, half, -single), COURT_HALF);
-    segment(along(box, -half, single), along(box, half, single), COURT_HALF);
-    segment(along(box, -service, -single), along(box, -service, single), COURT_HALF);
-    segment(along(box, service, -single), along(box, service, single), COURT_HALF);
-    segment(along(box, -service, 0), along(box, service, 0), COURT_HALF);
   };
 
   const parking = (patch: Patch) => {
@@ -530,15 +561,26 @@ export function groundValues(campus: Campus, grid: Grid, middle: Point): Float32
     }
   }
   for (const strip of strips) {
-    if (strip.surface !== 'track') continue;
-    use(strip.surface);
-    lanes(strip);
+    if (strip.surface === 'track') {
+      use(strip.surface);
+      lanes(strip);
+    } else if (strip.crossing) {
+      use(strip.surface);
+      zebra(strip);
+    } else if (strip.label === 'Road' && strip.width >= 8 && !strip.aisle) {
+      use(strip.surface);
+      centre(strip);
+    }
   }
   for (const patch of patches) {
     use(patch.surface, patch);
-    if (patch.surface === 'court') court(patch);
-    else if (FIELD_SPORTS.includes(patch.label ?? '')) field(patch);
-    else if (patch.label === 'Parking lot') parking(patch);
+    if (patch.label === 'Parking lot') {
+      parking(patch);
+      continue;
+    }
+    if (patch.label === 'Pool' && patch.surface === 'water') pool(patch);
+    const layout = layoutOf(patch, patches);
+    if (layout) for (const mark of layout.marks) ribbon(mark.points, mark.closed, mark.half);
   }
 
   return values.slice(0, used);

@@ -1,6 +1,9 @@
 import { areaOf, boundsOf, covers, padded, plannedBounds, squareArea, touches, type Area, type Bounds, type LatLon } from './area';
-import type { Block, Campus, Patch, Strip, Surface, Tree } from './campus';
-import { boxOf, insideRing, ringArea, type Point, type Ring } from './geometry';
+import { CAMPUS_VERSION, type Block, type Campus, type Cover, type Edge, type EdgeKind, type Patch, type Strip, type Surface, type Thing, type Tree } from './campus';
+import { bearing, bufferLine, materialTone, metres, roofRise, roofShape, standHeight, toneOf } from './detail';
+import { boxOf, centerOf, insideRing, ringArea, type Point, type Ring } from './geometry';
+import { COVER_HEIGHT } from './shade';
+import { diamondOf, infieldPatches, sportOf } from './sports';
 import { Stopped, firstOf, linked, type Source } from './race';
 
 export type { Bounds } from './area';
@@ -85,6 +88,16 @@ export function campusQuery(bounds: Bounds): string {
     `nwr["landuse"~"^(grass|meadow|recreation_ground|village_green)$"]${box}`,
     `nwr["natural"~"^(water|wood|scrub|sand|bare_rock|tree_row)$"]${box}`,
     `node["natural"="tree"]${box}`,
+    `nwr["building:part"]${box}`,
+    `nwr["leisure"="bleachers"]${box}`,
+    `nwr["amenity"~"^(shelter|bench|bicycle_parking)$"]${box}`,
+    `nwr["man_made"~"^(canopy|flagpole)$"]${box}`,
+    `way["covered"="yes"]${box}`,
+    `way["barrier"~"^(fence|wall|retaining_wall|hedge)$"]${box}`,
+    `node["entrance"]${box}`,
+    `node["highway"="street_lamp"]${box}`,
+    `nwr["generator:source"="solar"]${box}`,
+    `nwr["plant:source"="solar"]${box}`,
   ];
   return `[out:json][timeout:25];(${parts.join(';')};);out body geom;`;
 }
@@ -240,6 +253,8 @@ const ROADS: Record<string, [Surface, number, string]> = {
   steps: ['concrete', 2.2, 'Steps'],
 };
 
+const COVERED_PATHS = new Set(['footway', 'path', 'pedestrian', 'steps']);
+
 const SPORT_NAMES: [string, string][] = [
   ['tennis', 'Tennis court'],
   ['pickleball', 'Pickleball court'],
@@ -263,17 +278,120 @@ function pitchName(played: string[]): string {
   return 'Play area';
 }
 
-function blockHeight(tags: Tags, area: number, home: boolean): { height: number; guessed: boolean } {
+const STOREY = 4.3;
+const STANDS = new Set(['grandstand', 'bleachers']);
+const ROOFS_ONLY = new Set(['roof', 'carport', 'canopy']);
+const BARRIERS: Record<string, [EdgeKind, number]> = { fence: ['fence', 1.8], wall: ['wall', 1], retaining_wall: ['wall', 1], hedge: ['hedge', 1.2] };
+const INHERITED = ['building:colour', 'building:material', 'roof:colour', 'roof:material', 'roof:shape', 'roof:orientation'];
+
+function blockHeight(tags: Tags, area: number, home: boolean, ring?: Ring): { height: number; guessed: boolean } {
   const tagged = Number.parseFloat(tags.height ?? '');
   if (Number.isFinite(tagged) && tagged > 1) return { height: tagged, guessed: false };
   const levels = Number.parseFloat(tags['building:levels'] ?? '');
-  if (Number.isFinite(levels) && levels > 0) return { height: Math.round(levels * 4.3 * 10) / 10, guessed: false };
+  if (Number.isFinite(levels) && levels > 0) return { height: Math.round(levels * STOREY * 10) / 10, guessed: false };
   if (tags.building === 'roof' || tags.building === 'carport') return { height: 3.5, guessed: true };
-  if (tags.building === 'grandstand' || tags.building === 'bleachers') return { height: 8, guessed: true };
+  if (STANDS.has(tags.building ?? '') || tags.leisure === 'bleachers') return { height: ring ? standHeight(ring) : 8, guessed: true };
   if (area > 2500) return { height: home ? 9.5 : 8, guessed: true };
   if (area > 350) return { height: 6.5, guessed: true };
   if (area > 60) return { height: home ? 4 : 5.5, guessed: true };
   return { height: 3, guessed: true };
+}
+
+function count(value: string | undefined): number | undefined {
+  const number = Number.parseFloat(value ?? '');
+  return Number.isFinite(number) && number >= 0 ? number : undefined;
+}
+
+function shaped(block: Block, tags: Tags, ring: Ring, tallTagged: boolean): Block {
+  const result: Block = { ...block };
+  const levels = count(tags['building:levels']);
+  if (levels !== undefined && levels >= 1 && levels <= 60) result.levels = Math.round(levels);
+  const low = metres(tags.min_height) ?? (count(tags['building:min_level']) !== undefined ? (count(tags['building:min_level']) as number) * STOREY : undefined);
+  if (low !== undefined && low > 0.1 && low < result.height - 0.5) result.min = Math.round(low * 10) / 10;
+  const wall = toneOf(tags['building:colour']) ?? materialTone(tags['building:material']);
+  const top = toneOf(tags['roof:colour'], 'roof') ?? materialTone(tags['roof:material']);
+  if (wall) result.wall = wall;
+  if (top) result.top = top;
+  if (STANDS.has(tags.building ?? '') || tags.leisure === 'bleachers') result.stand = true;
+  const shape = roofShape(tags['roof:shape']);
+  if (shape && !result.stand) {
+    result.roof = shape;
+    if (tags['roof:orientation'] === 'across') result.across = true;
+    const slope = bearing(tags['roof:direction']);
+    if (slope !== undefined) result.slope = slope;
+    if (shape !== 'flat') {
+      const roofLevels = count(tags['roof:levels']);
+      const riseTagged = metres(tags['roof:height']) ?? (roofLevels !== undefined && roofLevels > 0 ? roofLevels * 3 : undefined);
+      const room = result.height - (result.min ?? 0) - 0.5;
+      if (tallTagged) {
+        const rise = riseTagged ?? roofRise(shape, ring);
+        if (rise > 0 && rise < room) result.rise = Math.round(rise * 10) / 10;
+        else if (rise >= room) delete result.roof;
+      } else if (riseTagged !== undefined && riseTagged > 0) {
+        result.rise = Math.round(riseTagged * 10) / 10;
+        result.height = Math.round((result.height + riseTagged) * 10) / 10;
+      }
+    }
+  }
+  return result;
+}
+
+function outdoors(tags: Tags): boolean {
+  if (tags.indoor !== undefined && tags.indoor !== 'no') return false;
+  if (tags.location === 'underground' || tags.location === 'indoor' || tags.location === 'roof') return false;
+  if (tags.parking === 'underground' || tags.parking === 'multi-storey') return false;
+  return Number.parseFloat(tags.layer ?? '0') >= 0 || !Number.isFinite(Number.parseFloat(tags.layer ?? '0'));
+}
+
+function heightTagged(tags: Tags): boolean {
+  const tagged = Number.parseFloat(tags.height ?? '');
+  return Number.isFinite(tagged) && tagged > 1;
+}
+
+type Part = { id: number; ring: Ring; tags: Tags };
+
+function coverage(outline: Ring, parts: Ring[]): number {
+  const box = boxOf([outline]);
+  const step = Math.max(0.5, Math.sqrt(ringArea(outline)) / 40);
+  let inside = 0;
+  let covered = 0;
+  for (let x = box.minX + step / 2; x < box.maxX; x += step) {
+    for (let y = box.minY + step / 2; y < box.maxY; y += step) {
+      if (!insideRing(outline, x, y)) continue;
+      inside += 1;
+      if (parts.some((ring) => insideRing(ring, x, y))) covered += 1;
+    }
+  }
+  return inside > 0 ? covered / inside : 0;
+}
+
+function withParts(blocks: Block[], parts: Part[], tagsOf: Map<Block, Tags>): Block[] {
+  if (parts.length === 0) return blocks;
+  const taken = new Set<Part>();
+  const kept: Block[] = [];
+  const added: Block[] = [];
+  for (const block of blocks) {
+    const mine = parts.filter((part) => {
+      if (taken.has(part)) return false;
+      const [x, y] = centerOf(part.ring);
+      return insideRing(block.ring, x, y);
+    });
+    if (mine.length === 0 || coverage(block.ring, mine.map((part) => part.ring)) < 0.75) {
+      kept.push(block);
+      continue;
+    }
+    const parent = tagsOf.get(block) ?? {};
+    for (const part of mine) {
+      taken.add(part);
+      const tags: Tags = { ...Object.fromEntries(INHERITED.filter((key) => parent[key] !== undefined).map((key) => [key, parent[key]])), ...part.tags };
+      const own = heightTagged(tags) || count(tags['building:levels']) !== undefined;
+      const base = own ? blockHeight({ ...tags, building: 'yes' }, ringArea(part.ring), block.home) : { height: block.height, guessed: block.guessed };
+      const made = shaped({ id: part.id, ring: part.ring, home: block.home, height: base.height, guessed: base.guessed }, tags, part.ring, own && heightTagged(tags));
+      if (made.height - (made.min ?? 0) < 0.5) continue;
+      added.push(made);
+    }
+  }
+  return [...kept, ...added];
 }
 
 export function buildCampus(name: string, place: string, center: LatLon, outline: LatLon[][], elements: Element[]): Campus {
@@ -298,29 +416,81 @@ export function buildCampus(name: string, place: string, center: LatLon, outline
   const tracks: Ring[] = [];
   const clear: Ring[] = [];
   const fields: { patch: Patch; tagged: boolean }[] = [];
+  const covers: (Cover & { tags: Tags })[] = [];
+  const edges: Edge[] = [];
+  const things: Thing[] = [];
+  const stands: Block[] = [];
+  const parts: Part[] = [];
+  const solar: Ring[] = [];
+  const panels: Point[] = [];
+  const tagsOf = new Map<Block, Tags>();
+  const isSolar = (tags: Tags) => tags['generator:source'] === 'solar' || tags['plant:source'] === 'solar';
 
   for (const element of elements) {
     const tags = element.tags ?? {};
+    const old = mapped(element);
     if (element.type === 'node') {
-      if (tags.natural === 'tree' && element.lat !== undefined && element.lon !== undefined) {
-        const [x, y] = local({ lat: element.lat, lon: element.lon });
+      if (element.lat === undefined || element.lon === undefined) continue;
+      const [x, y] = local({ lat: element.lat, lon: element.lon });
+      if (old && tags.natural === 'tree') {
         const crown = Number.parseFloat(tags.diameter_crown ?? '');
         const tall = Number.parseFloat(tags.height ?? '');
         const radius = Number.isFinite(crown) && crown > 1 ? crown / 2 : 4;
-        trees.push({ x, y, radius, height: Number.isFinite(tall) && tall > 2 ? tall : radius * 2.2 });
+        const tree: Tree = { x, y, radius, height: Number.isFinite(tall) && tall > 2 ? tall : radius * 2.2 };
+        if (tags.leaf_type === 'needleleaved') tree.needle = true;
+        trees.push(tree);
       }
+      if (tags.man_made === 'flagpole') things.push({ kind: 'flagpole', x, y });
+      else if (tags.amenity === 'bench') things.push({ kind: 'bench', x, y });
+      else if (tags.amenity === 'bicycle_parking') things.push({ kind: 'bikes', x, y });
+      else if (tags.highway === 'street_lamp') things.push({ kind: 'lamp', x, y });
+      else if (tags.entrance !== undefined && tags.entrance !== 'no' && tags.entrance !== 'garage') things.push({ kind: tags.entrance === 'main' ? 'main door' : 'door', x, y });
+      if (isSolar(tags)) panels.push([x, y]);
       continue;
     }
     const holes = tags.building && element.type === 'relation' ? memberRings(element, true).filter(closed).map((raw) => open(raw.map(local))) : [];
+    const roofOnly = ROOFS_ONLY.has(tags.building ?? '') || (tags.building !== undefined && tags.building !== 'no' && tags.covered === 'yes') || tags.amenity === 'shelter' || tags.man_made === 'canopy';
     for (const raw of outerRings(element)) {
       const isClosed = closed(raw);
       const ring = open(raw.map(local));
+      if (isSolar(tags) && isClosed && ring.length >= 3) solar.push(ring);
+      const barrier = BARRIERS[tags.barrier ?? ''];
+      if (barrier && element.type === 'way') {
+        const height = metres(tags.height);
+        edges.push({ kind: barrier[0], line: raw.map(local), height: height !== undefined && height > 0.2 && height < 8 ? height : barrier[1] });
+      }
+      if (tags['building:part'] !== undefined && (tags.building === undefined || tags.building === 'no')) {
+        if (isClosed && ring.length >= 3) parts.push({ id: element.id, ring, tags });
+        continue;
+      }
+      if (roofOnly || (tags.covered === 'yes' && isClosed && !tags.highway && outdoors(tags))) {
+        if (isClosed && ring.length >= 3) {
+          const height = metres(tags.height);
+          covers.push({ id: element.id, ring, height: height !== undefined && height > 1.5 && height < 25 ? height : COVER_HEIGHT, home: within(ring), tags });
+        }
+        if (roofOnly) continue;
+      }
+      if (tags.leisure === 'bleachers' && !old) {
+        if (isClosed && ring.length >= 3) {
+          const home = within(ring);
+          const made = shaped({ id: element.id, ring, home, ...blockHeight(tags, ringArea(ring), home, ring) }, tags, ring, heightTagged(tags));
+          stands.push(made);
+        }
+        continue;
+      }
+      if (tags.amenity === 'bicycle_parking' && isClosed && ring.length >= 3) {
+        const [x, y] = centerOf(ring);
+        things.push({ kind: 'bikes', x, y });
+      }
+      if (!old) continue;
       if (tags.building && tags.building !== 'no') {
         if (!isClosed || ring.length < 3) continue;
         const inside = holes.filter((hole) => insideRing(ring, hole[0][0], hole[0][1]));
         const shape = inside.length > 0 ? withHoles(ring, inside) : ring;
         const home = within(ring);
-        blocks.push({ id: element.id, ring: shape, home, ...blockHeight(tags, ringArea(shape), home) });
+        const made = shaped({ id: element.id, ring: shape, home, ...blockHeight(tags, ringArea(shape), home, ring) }, tags, ring, heightTagged(tags));
+        tagsOf.set(made, tags);
+        blocks.push(made);
         continue;
       }
       if (tags.highway) {
@@ -333,7 +503,16 @@ export function buildCampus(name: string, place: string, center: LatLon, outline
         const lanes = Number.parseFloat(tags.lanes ?? '');
         const width = Number.parseFloat(tags.width ?? '');
         const wide = Number.isFinite(width) && width > 0.5 ? width : Number.isFinite(lanes) && lanes > 2 ? lanes * 3.5 : road[1];
-        strips.push({ surface: HARD[tags.surface ?? ''] ?? road[0], width: wide, line: raw.map(local), label: road[2] });
+        const crossing = tags.footway === 'crossing' || (tags.highway === 'footway' && tags.crossing !== undefined && tags.crossing !== 'no');
+        const strip: Strip = { surface: HARD[tags.surface ?? ''] ?? (crossing ? 'asphalt' : road[0]), width: wide, line: raw.map(local), label: road[2] };
+        if (crossing) strip.crossing = true;
+        if (tags.service === 'parking_aisle') strip.aisle = true;
+        strips.push(strip);
+        if (tags.covered === 'yes' && COVERED_PATHS.has(tags.highway)) {
+          const outline = bufferLine(strip.line, (wide + 1) / 2);
+          const height = metres(tags.height);
+          if (outline.length >= 4) covers.push({ id: element.id, ring: outline, height: height !== undefined && height > 1.5 && height < 25 ? height : COVER_HEIGHT, home: within(outline), tags });
+        }
         continue;
       }
       if (tags.natural === 'tree_row') {
@@ -344,7 +523,9 @@ export function buildCampus(name: string, place: string, center: LatLon, outline
           const count = Math.max(1, Math.round(Math.hypot(bx - ax, by - ay) / 9));
           for (let k = 0; k < count; k += 1) {
             const share = (k + 0.5) / count;
-            trees.push({ x: ax + (bx - ax) * share, y: ay + (by - ay) * share, radius: 3.6, height: 8 });
+            const tree: Tree = { x: ax + (bx - ax) * share, y: ay + (by - ay) * share, radius: 3.6, height: 8 };
+            if (tags.leaf_type === 'needleleaved') tree.needle = true;
+            trees.push(tree);
           }
         }
         continue;
@@ -366,6 +547,8 @@ export function buildCampus(name: string, place: string, center: LatLon, outline
         let surface: Surface = tagged ?? 'grass';
         if (!tagged && played.some((sport) => COURT_SPORTS.includes(sport))) surface = 'court';
         const patch: Patch = tagged || surface !== 'grass' ? { surface, ring, label: pitchName(played) } : { surface, ring, label: pitchName(played), guessed: true };
+        const sport = sportOf(tags.sport);
+        if (sport) patch.sport = sport;
         patches.push(patch);
         clear.push(ring);
         if (played.some((sport) => FIELD_SPORTS.includes(sport))) fields.push({ patch, tagged: Boolean(tagged) });
@@ -398,7 +581,27 @@ export function buildCampus(name: string, place: string, center: LatLon, outline
     if (tracks.some((ring) => insideRing(ring, x, y))) field.patch.surface = 'turf';
   }
 
-  return { name, place, center, boundary, clear, patches, strips, blocks, trees };
+  const diamonds: Patch[] = [];
+  for (const patch of patches) {
+    if ((patch.sport !== 'baseball' && patch.sport !== 'softball') || patch.surface !== 'grass') continue;
+    const diamond = diamondOf(patch.ring, patch.sport);
+    if (diamond) diamonds.push(...infieldPatches(diamond));
+  }
+  patches.push(...diamonds);
+
+  const roofs: Cover[] = covers.map(({ tags, ...cover }) => {
+    const sunny = isSolar(tags) || solar.some((ring) => {
+      const [x, y] = centerOf(ring);
+      return insideRing(cover.ring, x, y) || insideRing(ring, ...centerOf(cover.ring));
+    }) || panels.some(([x, y]) => insideRing(cover.ring, x, y));
+    return sunny ? { ...cover, solar: true } : cover;
+  });
+  const built = withParts([...blocks, ...stands], parts, tagsOf);
+  const campus: Campus = { version: CAMPUS_VERSION, name, place, center, boundary, clear, patches, strips, blocks: built, trees };
+  if (roofs.length > 0) campus.covers = roofs;
+  if (edges.length > 0) campus.edges = edges;
+  if (things.length > 0) campus.things = things;
+  return campus;
 }
 
 
@@ -555,12 +758,26 @@ const LANDUSE = /^(grass|meadow|recreation_ground|village_green)$/;
 const NATURAL = /^(water|wood|scrub|sand|bare_rock|tree_row)$/;
 const ORDER: Record<Element['type'], number> = { node: 0, way: 1, relation: 2 };
 
-export function relevant(element: Element): boolean {
+const AMENITIES = /^(shelter|bench|bicycle_parking)$/;
+const MADE = /^(canopy|flagpole)$/;
+const FENCES = /^(fence|wall|retaining_wall|hedge)$/;
+
+function mapped(element: Element): boolean {
   const tags = element.tags ?? {};
   if (tags.building !== undefined) return true;
   if (element.type === 'way' && (tags.amenity === 'parking' || tags.highway !== undefined)) return true;
   if (LEISURE.test(tags.leisure ?? '') || LANDUSE.test(tags.landuse ?? '') || NATURAL.test(tags.natural ?? '')) return true;
   return element.type === 'node' && tags.natural === 'tree';
+}
+
+export function relevant(element: Element): boolean {
+  if (mapped(element)) return true;
+  const tags = element.tags ?? {};
+  if (tags['building:part'] !== undefined || tags.leisure === 'bleachers') return true;
+  if (AMENITIES.test(tags.amenity ?? '') || MADE.test(tags.man_made ?? '')) return true;
+  if (element.type === 'way' && (tags.covered === 'yes' || FENCES.test(tags.barrier ?? ''))) return true;
+  if (element.type === 'node' && (tags.entrance !== undefined || tags.highway === 'street_lamp')) return true;
+  return tags['generator:source'] === 'solar' || tags['plant:source'] === 'solar';
 }
 
 function reachOf(element: Element): Bounds | null {
@@ -602,7 +819,7 @@ export async function loadCampus(found: Found, headers: Record<string, string> =
   const contents = (box: Bounds, signal: AbortSignal) => firstOf(contentsSources(box, headers), gap, deadline, signal);
   try {
     if (found.kind === 'node') {
-      const area = squareArea(found);
+      const area = squareArea({ lat: found.lat, lon: found.lon });
       const want = padded(area.bounds);
       return campusOf(found, area, tidy(await contents(want, controller.signal), want));
     }

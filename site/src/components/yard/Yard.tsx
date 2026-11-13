@@ -15,22 +15,24 @@ import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton';
 import { Slider } from '@/components/ui/slider';
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group';
+import { behind, newer } from '@/engine/aerial';
 import { SURFACES, surfaceChoices, type Campus, type Surface } from '@/engine/campus';
 import { centerOf } from '@/engine/geometry';
 import { DAY_END, DAY_START, RAMP, TOUCH_LIMIT } from '@/engine/heat';
 import type { Found } from '@/engine/osm';
+import { placeKey } from '@/engine/memory';
 import { warmUp } from '@/engine/remote';
 import { decodePlan } from '@/engine/share';
 import { clockLabel } from '@/engine/sun';
 import { FIRST_DAY, dayWeather, lastDay, localDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
 import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Cut, type Saved, type Tool } from './controller';
-import { Unmapped, carry, placeBundle, type Stage } from './loader';
+import { NoWeather, Unmapped, placeBundle, stopPhotos, type Stage } from './loader';
 import { quality } from './quality';
 import { rememberFixes } from './recall';
 import { SchoolPicker } from './SchoolPicker';
 import { OpenShared } from './ShareDialogs';
 import { adopt, clashes, dropHash, sharedBundle, sharedText, watchHash } from './shared';
-import { cutTree, editHeight, editSurface, fixesOf, keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
+import { carry, cutTree, editHeight, editSurface, fixesOf, keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
 
 const YardCanvas = lazy(() => import('./YardCanvas'));
 const loadCalendar = () => import('@/components/ui/calendar');
@@ -181,6 +183,7 @@ type LoadedProps = {
   onRaise: (block: number, height: number) => void;
   finder: RefObject<HTMLButtonElement | null>;
   first: RefObject<boolean>;
+  aim: RefObject<number | null>;
   refocus: RefObject<boolean>;
 };
 
@@ -208,7 +211,7 @@ function Roof({ yard, index, onRaise }: { yard: Yard; index: number; onRaise: (b
   );
 }
 
-function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, refocus }: LoadedProps) {
+function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, aim, refocus }: LoadedProps) {
   const [typed, setTyped] = useState('');
   const [said, setSaid] = useState('');
   const tier = useSyncExternalStore(quality.subscribe, quality.snapshot, quality.server);
@@ -234,17 +237,24 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, refo
     if (!drawn || still || !first.current) return;
     first.current = false;
     const target = yard.minute;
+    aim.current = target;
     yard.setMinute(yard.sunrise);
     const sweep = animate(yard.sunrise, target, {
       duration: 3.4,
       delay: 0.35,
       ease: [0.3, 0.05, 0.2, 1],
       onUpdate: (value) => yard.setMinute(value),
+      onComplete: () => {
+        aim.current = null;
+      },
     });
-    const stop = () => sweep.stop();
+    const stop = () => {
+      sweep.stop();
+      aim.current = null;
+    };
     window.addEventListener('pointerdown', stop, { once: true });
     return () => {
-      sweep.stop();
+      stop();
       window.removeEventListener('pointerdown', stop);
     };
   }, [yard, still, drawn]);
@@ -577,6 +587,7 @@ export default function YardStage({ base }: { base: string }) {
   const home = useRef('Heritage High School');
 
   const first = useRef(true);
+  const aim = useRef<number | null>(null);
   const refocus = useRef(false);
   const turns = useRef(0);
 
@@ -604,6 +615,7 @@ export default function YardStage({ base }: { base: string }) {
       kept = { key, bundle: next, weather, yard: built };
     }
     if (turn !== turns.current) return;
+    if (previous && previous.campus.center.lat === built.campus.center.lat && previous.campus.center.lon === built.campus.center.lon) built.cursor = previous.cursor;
     built.gone = next.was?.trees ?? [];
     built.cutter = cutAt;
     if (tool) built.setTool(tool);
@@ -632,11 +644,28 @@ export default function YardStage({ base }: { base: string }) {
     const shown = kept ? kept.yard : null;
     if (!current || !shown || !current.school || current.school.kind !== found.kind || current.school.id !== found.id) return;
     const next = carry(current, campus);
+    const minute = aim.current ?? shown.minute;
+    aim.current = null;
     keepSchool(next);
-    void show(next, shown.weather !== next.weather ? shown.weather : undefined, shown.minute, undefined, shown.saved(), shown.tool);
+    void show(next, shown.weather !== next.weather ? shown.weather : undefined, minute, undefined, shown.saved(), shown.tool);
+  };
+
+  const renew = async (found: Found, campus: Campus, shown: Promise<void>) => {
+    const asked = placeBundle(found);
+    asked.catch(() => undefined);
+    try {
+      await shown;
+      const arrival = await asked;
+      if (newer(arrival.pristine, campus)) refresh(found, arrival.pristine);
+      const late = await arrival.late;
+      if (late) refresh(found, late);
+    } catch {
+      return;
+    }
   };
 
   const pick = async (found: Found | null) => {
+    stopPhotos(found ? placeKey(found) : undefined);
     setNote('');
     setRetry(null);
     try {
@@ -664,7 +693,7 @@ export default function YardStage({ base }: { base: string }) {
       if (error instanceof Unmapped) {
         setNote('That school has no mapped buildings yet');
       } else {
-        setNote('The map did not load');
+        setNote(error instanceof NoWeather ? 'The weather did not load' : 'The map did not load');
         setRetry(() => () => void pick(found));
       }
       showFallback();
@@ -681,6 +710,7 @@ export default function YardStage({ base }: { base: string }) {
       dropHash();
       return;
     }
+    stopPhotos(plan.school ? placeKey(plan.school) : undefined);
     setNote('');
     setRetry(null);
     if (plan.school) setPicking(true);
@@ -710,9 +740,9 @@ export default function YardStage({ base }: { base: string }) {
       first.current = true;
       await show(next, undefined, undefined, undefined, saved);
       setPicking(false);
-    } catch {
+    } catch (error) {
       setPicking(true);
-      setNote('The map did not load');
+      setNote(error instanceof NoWeather ? 'The weather did not load' : 'The map did not load');
       setRetry(() => () => void openShared(text));
     } finally {
       setStatus('');
@@ -743,13 +773,15 @@ export default function YardStage({ base }: { base: string }) {
         }
         if (found) return;
         setDay(dayOf(file));
-        void show(file);
+        const shown = show(file);
+        if (file.school && behind(file.campus)) void renew(file.school, file.campus, shown);
       })
       .catch(() => live && !found && setFailed(true));
     const unwatch = watchHash();
     return () => {
       live = false;
       unwatch();
+      stopPhotos();
     };
   }, [base]);
 
@@ -864,7 +896,7 @@ export default function YardStage({ base }: { base: string }) {
   }
   return (
     <>
-      <Loaded key={`${yard.campus.name} ${yard.campus.center.lat} ${yard.weather.date}`} yard={yard} onFind={() => setPicking(true)} day={day} onDay={change} onEdit={edit} onRaise={raise} finder={finder} first={first} refocus={refocus} />
+      <Loaded key={`${yard.campus.name} ${yard.campus.center.lat} ${yard.weather.date}`} yard={yard} onFind={() => setPicking(true)} day={day} onDay={change} onEdit={edit} onRaise={raise} finder={finder} first={first} aim={aim} refocus={refocus} />
       {picker}
       <OpenShared
         open={asking !== null}

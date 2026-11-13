@@ -6,6 +6,7 @@ export type ShareKind = 'way' | 'relation' | 'node';
 export type SharedSchool = { kind: ShareKind; id: number; name: string; lat: number; lon: number };
 export type SharedSail = { corners: [Point, Point, Point, Point]; height: number };
 export type SurfaceFix = { patch: number; from: Surface; to: Surface };
+export type SpotFix = { at: Point; from: Surface; to: Surface };
 export type HeightFix = { building: number; nth: number; feet: number };
 export type Plan = {
   version: 1;
@@ -17,6 +18,7 @@ export type Plan = {
   surfaces: SurfaceFix[];
   heights: HeightFix[];
   cut?: Point[];
+  spots?: SpotFix[];
 };
 
 export const LIMITS = { trees: 500, sails: 50, fixes: 200, cut: 800, name: 120, text: 32768, bytes: 131072 };
@@ -51,6 +53,7 @@ function compact(plan: Plan): string {
   if (plan.surfaces.length > 0) body.f = plan.surfaces.map((fix) => [fix.patch, SURFACES[fix.from].code, SURFACES[fix.to].code]);
   if (plan.heights.length > 0) body.h = plan.heights.map((fix) => [fix.building, fix.nth, fix.feet]);
   if (plan.cut && plan.cut.length > 0) body.c = plan.cut.flatMap(([x, y]) => [decimetres(x), decimetres(y)]);
+  if (plan.spots && plan.spots.length > 0) body.g = plan.spots.flatMap((fix) => [decimetres(fix.at[0]), decimetres(fix.at[1]), SURFACES[fix.from].code, SURFACES[fix.to].code]);
   return JSON.stringify(body);
 }
 
@@ -176,8 +179,15 @@ function readPlan(body: unknown): Plan | null {
 
   const rawSurfaces = listOf(body.f, LIMITS.fixes);
   const rawHeights = listOf(body.h, LIMITS.fixes);
-  if (!rawSurfaces || !rawHeights || rawSurfaces.length + rawHeights.length > LIMITS.fixes) return null;
+  const rawSpots = listOf(body.g, LIMITS.fixes * 4);
+  if (!rawSurfaces || !rawHeights || !rawSpots || rawSpots.length % 4 !== 0 || rawSurfaces.length + rawHeights.length + rawSpots.length / 4 > LIMITS.fixes) return null;
   const last = SURFACE_ORDER.length - 1;
+  const spots: SpotFix[] = [];
+  for (let index = 0; index < rawSpots.length; index += 4) {
+    const [x, y, from, to] = rawSpots.slice(index, index + 4);
+    if (!whole(x, -REACH, REACH) || !whole(y, -REACH, REACH) || !whole(from, 0, last) || !whole(to, 0, last)) return null;
+    spots.push({ at: [x / 10, y / 10], from: SURFACE_ORDER[from], to: SURFACE_ORDER[to] });
+  }
   const surfaces: SurfaceFix[] = [];
   for (const item of rawSurfaces) {
     if (!Array.isArray(item) || item.length !== 3 || !whole(item[0], 0, 100000) || !whole(item[1], 0, last) || !whole(item[2], 0, last)) return null;
@@ -195,7 +205,7 @@ function readPlan(body: unknown): Plan | null {
   for (let index = 0; index < rawCut.length; index += 2) cut.push([(rawCut[index] as number) / 10, (rawCut[index + 1] as number) / 10]);
 
   const plan: Plan = { version: 1, school, date: body.d, years: body.y, trees, sails, surfaces, heights };
-  return cut.length > 0 ? { ...plan, cut } : plan;
+  return { ...plan, ...(cut.length > 0 ? { cut } : {}), ...(spots.length > 0 ? { spots } : {}) };
 }
 
 export async function decodePlan(text: unknown): Promise<Plan | null> {

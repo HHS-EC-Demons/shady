@@ -1,13 +1,14 @@
-import type { Block, Tree } from './campus';
+import type { Block, Cover, Tree } from './campus';
 import type { Point, Ring } from './geometry';
 import { ellipseSpans, polygonSpans, type Grid, type Span } from './raster';
 import type { SunRay } from './sun';
 
 export type Sail = { id: number; corners: [Point, Point, Point, Point]; height: number };
 
-export type Obstacles = { blocks: Block[]; trees: Tree[]; sails: Sail[] };
+export type Obstacles = { blocks: Block[]; trees: Tree[]; sails: Sail[]; covers?: Cover[] };
 
-export const LIGHT_UNDER = { block: 0.08, tree: 0.12, sail: 0.16 };
+export const LIGHT_UNDER = { block: 0.08, tree: 0.12, sail: 0.16, cover: 0.1 };
+export const COVER_HEIGHT = 3.5;
 export const LOWEST_SUN = 0.035;
 export const CANOPY_FLATTEN = 0.72;
 
@@ -47,21 +48,33 @@ export function addShadows(grid: Grid, light: Uint8Array, sun: SunRay, obstacles
   ];
   for (const block of obstacles.blocks) {
     const [dx, dy] = shadowShift(sun, block.height);
+    const low = Math.min(block.min ?? 0, block.height);
+    const [lx, ly] = low > 0 ? shadowShift(sun, low) : [0, 0];
     const ring = block.ring;
-    polygonSpans(grid, ring, underBlock);
+    if (low > 0) polygonSpans(grid, ring.map(([x, y]) => [x + lx, y + ly] as Point), underBlock);
+    else polygonSpans(grid, ring, underBlock);
     for (let i = 0; i < ring.length; i += 1) {
       const a = ring[i];
       const b = ring[(i + 1) % ring.length];
-      quad[0][0] = a[0];
-      quad[0][1] = a[1];
-      quad[1][0] = b[0];
-      quad[1][1] = b[1];
+      quad[0][0] = a[0] + lx;
+      quad[0][1] = a[1] + ly;
+      quad[1][0] = b[0] + lx;
+      quad[1][1] = b[1] + ly;
       quad[2][0] = b[0] + dx;
       quad[2][1] = b[1] + dy;
       quad[3][0] = a[0] + dx;
       quad[3][1] = a[1] + dy;
       polygonSpans(grid, quad, underBlock);
     }
+  }
+  const underCover = dim(LIGHT_UNDER.cover);
+  for (const cover of obstacles.covers ?? []) {
+    const [dx, dy] = shadowShift(sun, cover.height);
+    polygonSpans(
+      grid,
+      cover.ring.map(([x, y]) => [x + dx, y + dy] as Point),
+      underCover,
+    );
   }
   const underTree = dim(LIGHT_UNDER.tree);
   for (const tree of obstacles.trees) {
