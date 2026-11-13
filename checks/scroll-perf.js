@@ -1,10 +1,10 @@
 async (page) => {
   const site = 'http://127.0.0.1:4392/';
   const runs = [
-    { name: 'laptop 1080p', width: 1920, height: 1080, scale: 1 },
     { name: 'laptop 1080p on the low power chip', width: 1920, height: 1080, scale: 1, query: '&gpu=low' },
-    { name: 'laptop retina 1440 by 900 at 2x', width: 1440, height: 900, scale: 2 },
     { name: 'laptop retina 1440 by 900 at 2x on the low power chip', width: 1440, height: 900, scale: 2, query: '&gpu=low' },
+    { name: 'laptop 1080p', width: 1920, height: 1080, scale: 1 },
+    { name: 'laptop retina 1440 by 900 at 2x', width: 1440, height: 900, scale: 2 },
     { name: 'phone portrait at 3x', width: 390, height: 844, scale: 3 },
     { name: 'laptop 1080p with CPU slowed 4 times', width: 1920, height: 1080, scale: 1, slow: 4 },
   ];
