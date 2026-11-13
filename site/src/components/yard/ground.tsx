@@ -11,6 +11,7 @@ import { keep, take } from './stages';
 const SHADOW = '#2b4450';
 const PAPER = '#e3eaec';
 const ROAD = '#d6dee1';
+const YELLOW = '#e9c766';
 const FLOOR = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const spot = new THREE.Vector3();
 const MASK_LIMIT = 2048;
@@ -59,14 +60,15 @@ varying vec2 vWorld;
 varying float vKind;
 varying vec3 vAlong;
 varying vec3 vBevel;
+varying float vInk;
 void main() {
   vec4 world = modelMatrix * vec4(position, 1.0);
   float shade = 0.0;
-  if (aLine > 0.5) {
+  if (abs(aLine) > 0.5) {
     float perPixel = distance(world.xyz, cameraPosition) * uPixel;
     float wide = max(aHalf, 0.65 * perPixel);
     world.xz += aOut * wide;
-    shade = aLine * clamp(aHalf / wide * 1.5, 0.3, 1.0);
+    shade = clamp(aHalf / wide * 1.5, 0.3, 1.0);
   } else if (aHalf > 0.0) {
     vec2 anchor = world.xz + aOut;
     float reach = max(distance(vec3(anchor.x, 0.0, anchor.y), cameraPosition) - aHalf, 0.0);
@@ -81,6 +83,7 @@ void main() {
   vKind = aKind;
   vAlong = vec3(aAlong, dot(world.xz, aAlong) - aPhase);
   vBevel = aBevel;
+  vInk = aLine;
   vec4 mvPosition = viewMatrix * world;
   gl_Position = projectionMatrix * mvPosition;
   #ifdef GROUND_SHADOW
@@ -118,6 +121,7 @@ uniform vec3 uRoad;
 uniform vec3 uSun;
 uniform vec3 uEye;
 uniform vec3 uShade;
+uniform vec3 uYellow;
 uniform vec3 uAlbedo[${KINDS.length}];
 uniform float uSheen[${KINDS.length}];
 varying vec2 vUv;
@@ -128,6 +132,7 @@ varying vec2 vWorld;
 varying float vKind;
 varying vec3 vAlong;
 varying vec3 vBevel;
+varying float vInk;
 
 float hash(vec2 p) {
   vec3 q = fract(vec3(p.xyx) * 0.1031);
@@ -223,7 +228,8 @@ void main() {
     int kind = int(clamp(floor(vKind + 0.5), 0.0, ${(KINDS.length - 1).toFixed(1)}));
     float wash = clamp(0.18 + 0.72 * smoothstep(104.0, 140.0, degrees), 0.0, 0.9);
     vec3 base = mix(uAlbedo[kind], hot, wash);
-    base = mix(base, vec3(0.98, 0.985, 0.97), vLine * home * 0.55);
+    vec3 ink = vInk > 1.5 ? uYellow : (vInk < -0.5 ? base * vec3(0.46, 0.56, 0.64) : vec3(0.98, 0.985, 0.97));
+    base = mix(base, ink, vLine * home * 0.55);
     if (pixel < ${NEAR_PIXEL.toFixed(2)}) {
       float near = 1.0 - smoothstep(0.08, ${NEAR_PIXEL.toFixed(2)}, pixel);
       float tone = clamp(1.0 + grain(vWorld, fw, pixel) * near, 0.9, 1.06);
@@ -377,6 +383,7 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
       uniforms: {
         ...(stacked ? THREE.UniformsUtils.clone({ ...THREE.UniformsLib.lights, ...THREE.UniformsLib.fog }) : {}),
         uShade: { value: new THREE.Color(SHADOW) },
+        uYellow: { value: new THREE.Color(YELLOW) },
         uHeat: { value: heat.texture },
         uHome: { value: homeMask(yard, texture) },
         uRamp: { value: ramp },
