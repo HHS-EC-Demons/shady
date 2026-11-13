@@ -11,7 +11,7 @@ import type { Yard } from '../yard/controller';
 import { orientedBox } from '../yard/layout';
 import { BLOB_LIFT, buildSail, treeTint } from '../yard/models';
 import { Props } from '../yard/props';
-import { TIERS, chipName, powerChoice, quality, shortChip } from '../yard/quality';
+import { TIERS, chipName, keepFrame, powerChoice, quality, shortChip } from '../yard/quality';
 import { Backdrop, Blocks, Ground, MappedTrees, Pulse, Sun, blobSize, sunReach, useBlob, useTree } from '../yard/Scene';
 import type { Days } from './Film';
 import { BEATS, film } from './state';
@@ -172,14 +172,14 @@ function Trees({ yard, story, state }: { yard: Yard; story: Story; state: Shared
 
   if (count === 0) return null;
   return (
-    <group>
+    <group name="trees">
       <instancedMesh ref={crowns} args={[model.crown, undefined, count]} castShadow frustumCulled={false}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>
       <instancedMesh ref={trunks} args={[model.trunk, undefined, count]} castShadow frustumCulled={false}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>
-      <instancedMesh ref={blobs} args={[blob.geometry, blob.material, count]} renderOrder={-1} frustumCulled={false} />
+      <instancedMesh ref={blobs} name="blobs" args={[blob.geometry, blob.material, count]} renderOrder={-1} frustumCulled={false} />
     </group>
   );
 }
@@ -221,11 +221,10 @@ function SailModel({ yard, sail, state }: { yard: Yard; sail: Sail; state: Share
     seen.current = state.sail;
     const scale = Math.max(0.0001, state.sail);
     node.scale.set(scale, scale, scale);
-    node.visible = state.sail > 0.001;
   });
 
   return (
-    <group ref={group} position={[shape.x, 0, shape.z]} visible={false}>
+    <group ref={group} name="sail" position={[shape.x, 0, shape.z]} scale={0.0001}>
       {sailParts(model)}
     </group>
   );
@@ -413,7 +412,7 @@ type Props = { yard: Yard; days: Days; story: Story; onFrame: () => void; debug:
 
 const TIME_ELAPSED = 0x88bf;
 const GPU_DISJOINT = 0x8fbb;
-const PARTS = new Set(['ground', 'shade', 'blocks', 'trees', 'props', 'blobs', 'sail']);
+const PARTS = new Set(['ground', 'shade', 'backdrop', 'sun', 'blocks', 'trees', 'props', 'blobs', 'sail']);
 const KEEP_FRAMES = 8192;
 
 type Tally = { ms: number; calls: number; tris: number };
@@ -536,6 +535,15 @@ function useClock(box: HTMLElement | null): void {
   const search = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
   const timed = search?.get('perf') === 'gpu';
   const hide = search?.get('hide') ?? '';
+  const conceal = useMemo(() => {
+    const names = new Set(hide.split(',').filter(Boolean));
+    return (object: THREE.Object3D) => {
+      if (names.has(object.name)) object.visible = false;
+    };
+  }, [hide]);
+  useFrame(() => {
+    if (hide) scene.traverse(conceal);
+  });
   useEffect(() => {
     if (!timed || !box) return;
     const context = gl.getContext() as WebGL2RenderingContext;
@@ -546,7 +554,7 @@ function useClock(box: HTMLElement | null): void {
     const hidden = new Set(hide.split(',').filter(Boolean));
     const hooked = new WeakSet<THREE.Object3D>();
     const hook = (object: THREE.Object3D) => {
-      if (hidden.has(object.name) || (hidden.has('other') && partOf(object) === 'other' && (object as THREE.Mesh).isMesh)) object.visible = false;
+      if (hidden.has('other') && partOf(object) === 'other' && (object as THREE.Mesh).isMesh) object.visible = false;
       if (hooked.has(object)) return;
       hooked.add(object);
       const part = partOf(object);
@@ -628,7 +636,7 @@ export default function FilmScene({ yard, days, story, onFrame, debug }: Props) 
       frameloop="demand"
       dpr={[1, TIERS[tier].dpr]}
       camera={{ fov: 30, near: 5, far: 9000, position: [-300, 420, 600] }}
-      gl={{ antialias: true, powerPreference: powerChoice() }}
+      gl={{ antialias: true, stencil: true, preserveDrawingBuffer: keepFrame(), powerPreference: powerChoice() }}
       style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
       aria-hidden="true"
     >

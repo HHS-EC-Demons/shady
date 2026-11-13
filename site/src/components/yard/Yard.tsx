@@ -22,7 +22,7 @@ import { clockLabel } from '@/engine/sun';
 import { hottestDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
 import { SQUARE_FEET, YEARS, Yard, type Tool } from './controller';
 import { PerformanceMonitor } from '@react-three/drei';
-import { TIERS, powerChoice, quality } from './quality';
+import { TIERS, keepFrame, powerChoice, quality } from './quality';
 import { Scene, probeHeight, sunReach } from './Scene';
 import { SchoolPicker } from './SchoolPicker';
 import { keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
@@ -225,7 +225,7 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first }: Lo
           frameloop="demand"
           dpr={[1, TIERS[tier].dpr]}
           camera={{ fov: 30, near: 5, far: 9000, position: [-300, 420, 600] }}
-          gl={{ powerPreference: powerChoice() }}
+          gl={{ stencil: true, preserveDrawingBuffer: keepFrame(), powerPreference: powerChoice() }}
           style={{ position: 'absolute', inset: 0, cursor: yard.tool === 'look' ? undefined : 'crosshair' }}
           aria-hidden="true"
         >
