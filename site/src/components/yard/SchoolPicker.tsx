@@ -69,8 +69,11 @@ export function SchoolPicker({ open, onOpenChange, onPick, home, status, note, o
           <DialogTitle>Find a school</DialogTitle>
           <DialogDescription>Search for any school to load its campus</DialogDescription>
         </DialogHeader>
-        <Command shouldFilter={false} className="bg-raised">
-          <CommandInput value={text} onValueChange={setText} placeholder="School or address" disabled={status !== ''} className="h-12 text-base placeholder:text-soft" />
+        <Command
+          shouldFilter={false}
+          className="bg-raised [&_[data-slot=command-input-wrapper]]:p-2 [&_[data-slot=command-input-wrapper]]:pb-1 [&_[data-slot=input-group]]:h-12! [&_[data-slot=input-group-addon]]:pointer-events-none [&_[data-slot=input-group-addon]]:absolute [&_[data-slot=input-group-addon]]:left-1 [&_[data-slot=input-group-addon]]:z-10"
+        >
+          <CommandInput value={text} onValueChange={setText} placeholder="School or address" disabled={status !== ''} className="h-12 rounded-lg pl-9! text-base placeholder:text-soft" />
           {(status !== '' || note !== '') && (
             <div className="flex min-h-[3.25rem] items-center justify-between gap-3 border-b border-rule px-4 py-1.5">
               <p role="status" className="py-1.5 text-base font-medium">
@@ -89,8 +92,10 @@ export function SchoolPicker({ open, onOpenChange, onPick, home, status, note, o
               <CommandGroup>
                 {found.map((school) => (
                   <CommandItem key={`${school.kind} ${school.id}`} value={`${school.kind} ${school.id}`} onSelect={() => onPick(school)} className="min-h-11 cursor-pointer text-base">
-                    <span className="font-medium">{school.name}</span>
-                    <span className="text-soft">{school.place}</span>
+                    <span className="flex min-w-0 flex-col leading-snug sm:flex-row sm:flex-wrap sm:gap-x-2">
+                      <span className="font-medium">{school.name}</span>
+                      <span className="text-soft">{school.place}</span>
+                    </span>
                   </CommandItem>
                 ))}
               </CommandGroup>

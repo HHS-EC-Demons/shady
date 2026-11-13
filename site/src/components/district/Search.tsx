@@ -106,8 +106,10 @@ export function Search({ value, onPick, autoFocus = false, className }: Props) {
                 }}
                 className="min-h-11 cursor-pointer text-base"
               >
-                <span className="font-medium">{place.name}</span>
-                <span className="text-soft">{place.place}</span>
+                <span className="flex min-w-0 flex-col leading-snug">
+                  <span className="font-medium">{place.name}</span>
+                  <span className="text-soft">{place.place}</span>
+                </span>
               </CommandItem>
             ))}
           </CommandGroup>
