@@ -626,7 +626,7 @@ export function Sun({ yard, reach, locked = false, shadow = TIERS.high.shadow }:
           </mesh>
         </group>
       ))}
-      <group ref={ball}>
+      <group ref={ball} name="sun ball" userData={{ size }}>
         <mesh raycast={() => null}>
           <sphereGeometry args={[size, 40, 28]} />
           <meshBasicMaterial color={HEAT} />
@@ -684,19 +684,41 @@ function ProbeMark({ yard }: { yard: Yard }) {
 export { probeHeight, sunReach } from './controller';
 
 const pin = new THREE.Vector3();
+const disc = new THREE.Vector3();
+const rim = new THREE.Vector3();
+const CLEAR_TOP = 124;
+const LABEL_HALF = [24, 10];
 
 function Pins({ layer }: { layer: RefObject<HTMLDivElement | null> }) {
-  useFrame(({ camera, size }) => {
+  useFrame(({ camera, size, scene }) => {
     const root = layer.current;
     if (!root) return;
+    const sun = scene.getObjectByName('sun ball');
+    let sunX = 0;
+    let sunY = 0;
+    let sunR = -1;
+    if (sun?.visible) {
+      sun.getWorldPosition(disc);
+      rim.setFromMatrixColumn(camera.matrixWorld, 0).multiplyScalar(Number(sun.userData.size) || 0).add(disc).project(camera);
+      disc.project(camera);
+      sunX = ((disc.x + 1) / 2) * size.width;
+      sunY = ((1 - disc.y) / 2) * size.height;
+      sunR = Math.abs(rim.x - disc.x) * 0.5 * size.width;
+    }
     for (const node of Array.from(root.children)) {
       const item = node as HTMLElement;
       const at = item.dataset.at;
       if (!at) continue;
       const [x, y, z] = at.split(' ').map(Number);
       pin.set(x, y, z).project(camera);
+      const left = ((pin.x + 1) / 2) * size.width;
+      const top = ((1 - pin.y) / 2) * size.height;
       item.style.visibility = pin.z < 1 ? 'visible' : 'hidden';
-      item.style.transform = `translate3d(${((pin.x + 1) / 2) * size.width}px, ${((1 - pin.y) / 2) * size.height}px, 0)`;
+      if (item.dataset.hour !== undefined) {
+        const covered = sunR >= 0 && Math.abs(left - sunX) < sunR + LABEL_HALF[0] && Math.abs(top - sunY) < sunR + LABEL_HALF[1];
+        item.style.opacity = top < CLEAR_TOP || covered ? '0' : '';
+      }
+      item.style.transform = `translate3d(${left}px, ${top}px, 0)`;
     }
   });
   return null;
