@@ -26,6 +26,7 @@ npm run dev
   - `sun.ts` and `shade.ts` place the sun and cast shadows onto a grid.
   - `heat.ts` runs the day in ten minute steps and gives every grid cell a temperature.
   - `planner.ts` finds the best spots for trees.
+  - `aerial.ts` finds the trees a US school already has and checks its field surfaces in a public USDA aerial photo, with `naip.ts`, `utm.ts`, `look.ts` and `canopy.ts` doing the reading and the pixel work.
   - `places.ts` reports peak heat, hot hours and the walk to shade for each court, lot and field.
   - `story.ts` works out the numbers in the landing page captions at build time.
   - `cost.ts` prices a plan.
@@ -41,7 +42,8 @@ npm run dev
 - The map, the weather day and the sun position are real data.
 - Ground temperatures are modeled from published measurements. Nobody has checked them against a thermometer at this school yet. The Measure tool is there for that.
 - Building heights are estimates when the map has none. Tap a building to set its real height.
-- Unmapped ground counts as grass. The football field inside a running track is assumed to be artificial turf. Tap any field, court or lot to set its real surface. Fixes are saved in the browser.
+- Unmapped ground counts as grass. The football field inside a running track is assumed to be artificial turf unless the aerial photo shows living grass. Tap any field, court or lot to set its real surface. Fixes are saved in the browser.
+- At US schools the trees already standing come from a USDA aerial photo that can be a few years old. Small trees and trees inside building courtyards are often missed. With the Tree tool, tap a standing tree to remove it and tap the same spot to bring it back.
 - Shady reports ground temperature. It does not predict heat illness.
 - Loading another school depends on public map servers that are sometimes busy.
 

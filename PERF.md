@@ -8,8 +8,8 @@ Measured 2026-11-12 on a 2018 MacBook Pro in headless Chrome. The page asks for 
 | --- | --- |
 | 60 fps while scrolling at 1080p on integrated graphics | Intel UHD Graphics 630 at 1080p on the medium tier, 60 fps average and 60 fps at the 1% low in passes 2, 3 and 4, 55 fps average and 30 fps at the 1% low in pass 1 |
 | 60 fps while scrolling on the fast chip | Radeon Pro 555X at 1080p and at 1440 by 900 at 2x on the high tier, 60 fps average and 60 fps at the 1% low in all four passes |
-| Under 100 draw calls | 44 at the busiest beat on high, 38 on medium |
-| Under 300k triangles | 181k at the busiest beat on high, 112k on medium, both counting the shadow pass |
+| Under 100 draw calls | 48 at the busiest beat on high and 41 on medium, up from 44 and 38 |
+| Under 300k triangles | 262k at the busiest beat on high and 155k on medium with 474 standing trees, both counting the shadow pass, up from 181k and 112k with none |
 | Initial JavaScript under 350 KB gzipped | 72 KB before the 3D code is asked for, from the earlier load test and not measured again |
 | Largest Contentful Paint under 2.5 s | 116 ms on a local server, from the earlier load test and not measured again |
 | HTML content visible before the 3D is ready | Heading painted at 72 ms and film live at 1.3 s, from the earlier load test and not measured again |
@@ -40,6 +40,37 @@ Pass 4 ran in a fresh browser after the yard canvas change below, with the load 
 The live site at https://hhs-ec-demons.github.io/shady/ was scrolled the same way at 1080p just after another build on this machine ended, with the load at 3.4 at the start and 4.5 at the end. Intel UHD Graphics 630 on medium had 549 frames, 59 fps, 30 fps at the 1% low, a worst frame of 33 ms and 7 slow frames. Radeon Pro 555X on high had 556 frames, 60 fps, 60 fps at the 1% low, a worst frame of 17 ms and no slow frames.
 
 The phone row is this laptop at phone size. It reports the high tier because headless Chrome has no touch pointer.
+
+## Trees already standing
+
+Heritage now carries 474 trees found in the aerial photo, where it had none from the map before. Standing trees use a 79 triangle crown and a 10 triangle trunk in a quieter green, so they are told apart from planned trees and stay cheap. The high tier draws at most 600 of them, medium 250 and low 150, campus trees first and then the largest. Below the high tier they skip the soft blob under each tree, and their trunks never cast shadows.
+
+Scroll test on 2026-11-13 against the production build on `astro preview`, each run started with the one minute load under 3 or 4 as noted. Before is the same build with the old campus file and no standing trees.
+
+| Run | Chip | Before frames, average, 1% low, slow frames | After frames, average, 1% low, slow frames | After readout |
+| --- | --- | --- | --- | --- |
+| Laptop 1920 by 1080 with `gpu=low` | Intel UHD Graphics 630 | 577, 60 fps, 60 fps, 4 | 574, 59 fps, 30 fps, 7 | 41 calls, 155k tris, dpr 1.00, medium |
+| Laptop 1440 by 900 at 2x with `gpu=low` | Intel UHD Graphics 630 | 475, 58 fps, 30 fps, 13 | 460, 57 fps, 30 fps, 27 | 41 calls, 155k tris, dpr 1.25, medium |
+| Laptop 1920 by 1080 | Radeon Pro 555X | 581, 60 fps, 60 fps, 0 | 581, 60 fps, 60 fps, 0 | 48 calls, 262k tris, dpr 1.00, high |
+| Laptop 1440 by 900 at 2x | Radeon Pro 555X | 488, 60 fps, 60 fps, 0 | 489, 60 fps, 60 fps, 0 | 48 calls, 262k tris, dpr 1.50, high |
+| Phone 390 by 844 at 3x | Radeon Pro 555X | 460, 60 fps, 60 fps, 0 | 460, 60 fps, 60 fps, 0 | 48 calls, 262k tris, dpr 1.50, high |
+| Laptop 1080p with the CPU slowed 4 times | Radeon Pro 555X | 582, 60 fps, 60 fps, 0 | 581, 60 fps, 60 fps, 0 | 48 calls, 262k tris, dpr 1.00, high |
+
+The before pass started at a load of 3.3 and ended at 11. The after pass started at 2.9 and ended at 4.7. A separate Intel only pass a minute earlier, started at 2.9, gave 577 frames, 59 fps, 60 fps at the 1% low and 5 slow frames at 1080p, and 476 frames, 58 fps, 30 fps at the 1% low and 13 slow frames at 1440 by 900. The Radeon rows are unchanged. The Intel rows sit at or just under the old numbers and vary from pass to pass by more than the difference. With the blob under every standing tree still drawn on medium, the Intel rows fell to 56 and 57 fps, which is why medium skips it.
+
+## Reading the aerial photo
+
+When a US school is picked, `aerial.ts` asks the Planetary Computer index for the newest NAIP photo over the campus, then reads only the tiles under the campus from the 1.2 m overview with range requests. The geotiff reader and the finder load only at that moment, 17 KB and 7 KB gzipped, in the engine worker. The finder takes 0.1 to 0.4 s of worker time on these campuses and 1.1 s on the 1.1 km Allen High School campus. The step gives up after 8 seconds and the school loads without it.
+
+| School | Photo | Bytes read | Seconds to read |
+| --- | --- | --- | --- |
+| Heritage High School, Frisco TX | July 2022 | 2.9 MB | 2.3 to 3.4 s |
+| Roosevelt High School, Seattle WA | October 2023 | 1.2 MB | 1.8 to 2.9 s |
+| Walt Whitman High School, Bethesda MD | October 2023 | 2.8 MB | 2.3 s |
+| Desert Vista High School, Phoenix AZ | June 2025 | 3.0 MB | 2.1 s |
+| Allen High School, Allen TX | July 2022 | 4.3 MB | 2.5 s |
+
+The photo is read while the weather day loads, so the school appears about 2.5 s later than before. In the yard on the production build, Roosevelt High School took 15.4 s and 17.0 s from the pick to the model with the photo and 12.9 s with the photo hosts blocked. Most of that time is the map servers, which reset connections during these runs. Heritage reads nothing at run time because its trees are baked into the campus file.
 
 ## GPU time per frame
 
@@ -126,6 +157,8 @@ After is the new production build on the same local preview with the same Lighth
 
 After the deploy the live site was measured once per page with the same settings. Home scored 93 with an LCP of 0.9 s, 330 ms of total blocking time, a longest task of 155 ms and 3.7 s to interactive. Yard scored 85 with an LCP of 2.2 s, 510 ms of total blocking time, a longest task of 206 ms and 4.0 s to interactive. Another build started on this machine during the yard run and the load reached 9 by its end.
 
+With 474 standing trees in the Heritage file the same preview gave these results on 2026-11-13, three runs per page, each started with the one minute load under 3. Home scored 92, 89 and 86 with 266, 339 and 552 ms of total blocking time. Yard scored 85, 85 and 86 with an LCP of 3.1 s, up from 2.9 s, because the campus file it waits for grew from 44 KB to 74 KB. Plan scored 95, 94 and 95. Accessibility stayed at 100 on all three pages. One extra home run started at a load of 4 scored 68 with a 2.4 s task that Lighthouse could not attribute to any script, and two home runs with the old campus file on the same build scored 90 and 91.
+
 The first live table above was also taken on a busier machine than the local runs, which is why its blocking times are far higher than the local before table for the same build.
 
 Sources was not measured again. On this laptop without throttling the film went live 1.1 s after the page was requested on the local preview, down from 1.6 s for the old build, and going back to the landing page took 0.38 s, down from 0.66 s.
@@ -143,7 +176,7 @@ The heat model now runs in a module Web Worker that calls the same engine functi
 - The heat texture uploads before the frame starts, so it never breaks the render pass.
 - The film and yard canvases keep their drawing buffer on devices with a mouse or trackpad, so Chrome does not clear it in a pass of its own. Touch devices keep the browser default because no phone has been measured.
 - The shade sail is drawn at near zero size from the first frame, so its shaders compile at load instead of mid scroll.
-- Film trees and mapped trees use the lighter 683 triangle crown. Neighbor buildings are one merged mesh.
+- Film trees use the lighter 683 triangle crown and standing trees a 79 triangle one, capped per tier. Neighbor buildings are one merged mesh.
 - No allocation inside frame callbacks.
 - The heat simulation runs once at load. Scrolling only blends finished results.
 - Three.js loads after first paint through a lazy import.
