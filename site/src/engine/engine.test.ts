@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { rasterize, SURFACES, type Campus } from './campus';
 import { insideRing, ringArea, type Ring } from './geometry';
-import { DAY_START, STEP, STEPS, backdropOf, decode, encode, hottestMinute, rampColor, simulate, tally, temperatureAt } from './heat';
+import { DAY_START, STEP, STEPS, backdropOf, decode, encode, hottestMinute, rampColor, sharePair, simulate, tally, temperatureAt } from './heat';
 import { assemble, buildCampus } from './osm';
 import { placeDay, placesOf, shadeDistance, walkToShade } from './places';
 import { Planner } from './planner';
@@ -347,5 +347,20 @@ describe('campus from map data', () => {
     expect(result.peak).toBeGreaterThan(130);
     expect(result.peak).toBeLessThan(190);
     expect(took).toBeLessThan(3000);
+  });
+});
+
+describe('sharePair', () => {
+  it('keeps whole numbers when the rounded shares differ', () => {
+    expect(sharePair(0.31, 0.26)).toEqual(['31', '26']);
+  });
+
+  it('shows one decimal when the rounded shares match but the real ones do not', () => {
+    expect(sharePair(0.2611, 0.2584)).toEqual(['26.1', '25.8']);
+  });
+
+  it('keeps whole numbers when the shares match to one decimal', () => {
+    expect(sharePair(0.26, 0.26)).toEqual(['26', '26']);
+    expect(sharePair(0.26012, 0.25998)).toEqual(['26', '26']);
   });
 });

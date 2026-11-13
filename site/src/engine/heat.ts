@@ -182,6 +182,14 @@ export const RAMP: [number, [number, number, number]][] = [
   [176, [169, 74, 72]],
 ];
 
+export function sharePair(first: number, second: number): [string, string] {
+  const a = first * 100;
+  const b = second * 100;
+  const fine = Math.round(a) === Math.round(b) && a.toFixed(1) !== b.toFixed(1);
+  const show = (value: number) => (fine ? value.toFixed(1) : String(Math.round(value)));
+  return [show(a), show(b)];
+}
+
 export function rampColor(temperature: number): [number, number, number] {
   if (temperature <= RAMP[0][0]) return RAMP[0][1];
   for (let i = 1; i < RAMP.length; i += 1) {

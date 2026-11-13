@@ -6,7 +6,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { SURFACES, atHome, extentOf } from '@/engine/campus';
 import { dollars, planCost } from '@/engine/cost';
-import { TOUCH_LIMIT, rampColor } from '@/engine/heat';
+import { TOUCH_LIMIT, rampColor, sharePair } from '@/engine/heat';
 import { unproject } from '@/engine/osm';
 import { warmUp } from '@/engine/remote';
 import { placeDay, placesOf, shadeDistance, walkToShade, type PlaceDay } from '@/engine/places';
@@ -255,6 +255,7 @@ function Sheet({ yard, bundle, base }: { yard: Yard; bundle: Bundle; base: strin
   const after = yard.tallyOf('day', yard.peak);
   const cooled = Math.round((yard.cooled(yard.peak) * SQUARE_FEET) / 100) * 100;
   const cost = planCost(trees.length, yard.sails);
+  const shares = sharePair(before.hot, after.hot);
   const figures = [
     { label: 'School', value: yard.campus.name, wide: true },
     { label: 'Day', value: dayLabel(yard.weather.date), wide: true },
@@ -266,7 +267,7 @@ function Sheet({ yard, bundle, base }: { yard: Yard; bundle: Bundle; base: strin
       { label: `Trees at ${yard.years} years`, value: String(trees.length), wide: false },
       { label: 'Sails', value: String(sails.length), wide: false },
       { label: `Cooled ground at ${clockLabel(yard.peak)}`, value: `${cooled.toLocaleString('en-US')} sq ft`, wide: false },
-      { label: `Ground over ${TOUCH_LIMIT}°F`, value: `${Math.round(before.hot * 100)}% to ${Math.round(after.hot * 100)}%`, wide: false },
+      { label: `Ground over ${TOUCH_LIMIT}°F`, value: `${shares[0]}% to ${shares[1]}%`, wide: false },
       { label: 'Cost to plant and build', value: `${dollars(cost.low)} to ${dollars(cost.high)}`, wide: true },
     );
   }
