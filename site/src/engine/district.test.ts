@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { SURFACES, type Campus, type Ground } from './campus';
+import { CAMPUS_VERSION, SURFACES, mapped, type Campus, type Ground } from './campus';
 import {
   DISTRICT_LIFE,
   FRAME_SIDE,
   HOURS,
   MOST_DISTRICTS,
   alive,
+  bareGround,
   countLine,
   cropOf,
   fillGaps,
@@ -20,8 +21,11 @@ import {
   schoolsFromOverpass,
   schoolsFromPhoton,
   shareAt,
+  shownRows,
+  skipPhotos,
   slowLink,
   summarize,
+  upToDate,
   type Row,
   type Summary,
 } from './district';
@@ -49,6 +53,9 @@ function summary(share: number, extra: Partial<Summary> = {}): Summary {
     mask: new Uint8Array(1),
     blocks: [],
     photo: false,
+    covers: [],
+    open: 0.6,
+    version: CAMPUS_VERSION,
     ...extra,
   };
 }
@@ -171,6 +178,24 @@ describe('ordering', () => {
     expect(slowLink({ effectiveType: '4g', saveData: true })).toBe(true);
     expect(slowLink({ effectiveType: '2g' })).toBe(true);
     expect(slowLink({ effectiveType: '3g' })).toBe(true);
+    expect(skipPhotos({ effectiveType: '4g' }, false)).toBe(false);
+    expect(skipPhotos({ effectiveType: '4g' }, true)).toBe(true);
+    expect(skipPhotos(undefined, true)).toBe(true);
+  });
+
+  it('leaves out schools with almost no open ground and counts only what is shown', () => {
+    expect(bareGround({ open: 0.05, area: 90000 })).toBe(true);
+    expect(bareGround({ open: 0.6, area: 2000 })).toBe(true);
+    expect(bareGround({ open: 0.6, area: 90000 })).toBe(false);
+    const rows = [row(1, 'done', 0.4), row(2, 'bare', 0), row(3, 'waiting'), row(4, 'done', 0.1)];
+    expect(shownRows(rows).map((item) => item.school.id)).toEqual([1, 4, 3]);
+    expect(countLine(shownRows(rows).length, rows.length)).toBe('3 of 4 schools');
+  });
+
+  it('treats a summary from an older campus as stale', () => {
+    expect(upToDate(summary(0.3))).toBe(true);
+    expect(upToDate(summary(0.3, { version: CAMPUS_VERSION - 1 }))).toBe(false);
+    expect(upToDate(undefined)).toBe(false);
   });
 });
 
@@ -216,8 +241,12 @@ function yardCampus(): Campus {
     blocks: [
       { id: 1, ring: [[-20, -10], [10, -10], [10, 20], [-20, 20]], height: 8, guessed: false, home: true },
       { id: 2, ring: [[100, 100], [110, 100], [110, 110], [100, 110]], height: 6, guessed: false, home: false },
+      { id: 3, ring: [[20, 20], [30, 20], [30, 30], [20, 30]], height: 9, min: 5, guessed: false, home: true },
+      { id: 4, ring: [[-60, 30], [-40, 30], [-40, 40], [-60, 40]], height: 5, guessed: false, home: true, stand: true },
     ],
+    covers: [{ id: 5, ring: [[-60, -40], [-40, -40], [-40, -30], [-60, -30]], height: 4, home: true }],
     trees: [],
+    version: CAMPUS_VERSION,
   };
 }
 
@@ -247,11 +276,25 @@ describe('summary maths', () => {
   });
 
   it('keeps only school buildings, placed in the frame box', () => {
-    expect(made.blocks).toHaveLength(1);
+    expect(made.blocks).toHaveLength(3);
     const xs = made.blocks[0].ring.filter((_value, index) => index % 2 === 0);
     expect(Math.min(...xs)).toBeGreaterThan(0);
     expect(Math.max(...xs)).toBeLessThan(made.width);
     expect(made.blocks[0].height).toBe(8);
+    expect(made.blocks[1]).toMatchObject({ height: 9, min: 5 });
+    expect(made.blocks[2].stand).toBe(true);
+    expect(made.covers).toHaveLength(1);
+    expect(made.covers[0].height).toBe(4);
+    expect(made.version).toBe(CAMPUS_VERSION);
+    expect(made.open).toBeGreaterThan(0.5);
+    expect(bareGround(made)).toBe(false);
+    expect(mapped(campus)).toBe(true);
+  });
+
+  it('marks a school mapped only as its building as bare', () => {
+    const building: Campus = { ...campus, boundary: [[[-20, -10], [10, -10], [10, 20], [-20, 20]]], patches: [], covers: [], blocks: [campus.blocks[0]] };
+    const shut = openCampus(building, hotDay);
+    expect(bareGround(summarize(building, shut.ground, shut.bare, shut.peak))).toBe(true);
   });
 
   it('downsamples heat frames to at most 96 cells on the long side', () => {

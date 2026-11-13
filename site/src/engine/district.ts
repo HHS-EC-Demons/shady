@@ -1,5 +1,5 @@
 import { squareAround, type Bounds, type LatLon } from './area';
-import { SURFACES, extentOf as campusExtent, type Campus, type Ground } from './campus';
+import { CAMPUS_VERSION, SURFACES, extentOf as campusExtent, type Campus, type Ground } from './campus';
 import { DAY_START, STEP, tally, type HeatDay } from './heat';
 import { extentOf, type Found, type PhotonFeature } from './osm';
 
@@ -26,7 +26,7 @@ export type Listed = {
   center?: { lat: number; lon: number };
 };
 
-export type Footprint = { ring: number[]; height: number };
+export type Footprint = { ring: number[]; height: number; min?: number; stand?: boolean };
 
 export type Summary = {
   share: number;
@@ -43,15 +43,14 @@ export type Summary = {
   mask: Uint8Array;
   blocks: Footprint[];
   photo: boolean;
+  covers: Footprint[];
+  open: number;
+  version: number;
 };
 
-export type Status = 'waiting' | 'loading' | 'done' | 'failed' | 'unmapped';
+export type Status = 'waiting' | 'loading' | 'done' | 'failed' | 'unmapped' | 'bare';
 
 export type Row = { school: Found; status: Status; summary?: Summary; looked?: boolean };
-
-export function hasMap(campus: Campus): boolean {
-  return campus.blocks.some((block) => block.home) || campus.patches.length > 0;
-}
 
 export function schoolKey(place: { kind: string; id: number }): string {
   return `${place.kind}/${place.id}`;
@@ -168,12 +167,27 @@ export function nearest(schools: Found[], center: LatLon, most = MOST_SCHOOLS): 
     .map((item) => item.school);
 }
 
+export const LEAST_OPEN = 0.15;
+export const LEAST_GROUND = 4300;
+
+export function bareGround(summary: Pick<Summary, 'open' | 'area'>): boolean {
+  return summary.open < LEAST_OPEN || summary.area < LEAST_GROUND;
+}
+
+export function upToDate(summary: Pick<Summary, 'version'> | undefined): boolean {
+  return Boolean(summary) && (summary?.version ?? 0) >= CAMPUS_VERSION;
+}
+
+export function shownRows(rows: Row[]): Row[] {
+  return ordered(rows).filter((row) => row.status !== 'bare');
+}
+
 export function countLine(shown: number, total: number): string {
   if (total > shown) return `${shown} of ${total} schools`;
   return `${shown} ${shown === 1 ? 'school' : 'schools'}`;
 }
 
-const RANK: Record<Status, number> = { done: 0, loading: 1, waiting: 1, failed: 2, unmapped: 2 };
+const RANK: Record<Status, number> = { done: 0, loading: 1, waiting: 1, failed: 2, unmapped: 2, bare: 3 };
 
 export function ordered(rows: Row[]): Row[] {
   return rows
@@ -222,6 +236,10 @@ export type Link = { saveData?: boolean; effectiveType?: string };
 export function slowLink(link: Link | undefined): boolean {
   if (!link) return false;
   return link.saveData === true || ['slow-2g', '2g', '3g'].includes(link.effectiveType ?? '');
+}
+
+export function skipPhotos(link: Link | undefined, coarse: boolean): boolean {
+  return coarse || slowLink(link);
 }
 
 export function fillGaps(values: Float32Array, known: Uint8Array, cols: number, rows: number): void {
@@ -339,12 +357,19 @@ export function summarize(campus: Campus, ground: Ground, day: HeatDay, peak: nu
   const { cols, rows, frames, mask } = framesOf(day, ground, crop);
   const minX = grid.minX + crop.col * grid.cell;
   const minY = grid.minY + crop.row * grid.cell;
-  const blocks = campus.blocks
+  const flat = (ring: [number, number][]) => ring.flatMap(([x, y]) => [Math.round((x - minX) * 10) / 10, Math.round((y - minY) * 10) / 10]);
+  const tenth = (value: number) => Math.round(value * 10) / 10;
+  const blocks: Footprint[] = campus.blocks
     .filter((block) => block.home && block.ring.length >= 3)
-    .map((block) => ({
-      ring: block.ring.flatMap(([x, y]) => [Math.round((x - minX) * 10) / 10, Math.round((y - minY) * 10) / 10]),
-      height: Math.round(block.height * 10) / 10,
-    }));
+    .map((block) => {
+      const footprint: Footprint = { ring: flat(block.ring), height: tenth(block.height) };
+      if (block.min !== undefined && block.min > 0 && block.min < block.height) footprint.min = tenth(block.min);
+      if (block.stand) footprint.stand = true;
+      return footprint;
+    });
+  const covers: Footprint[] = (campus.covers ?? []).filter((cover) => cover.home && cover.ring.length >= 3).map((cover) => ({ ring: flat(cover.ring), height: tenth(cover.height) }));
+  let home = 0;
+  for (let index = 0; index < ground.home.length; index += 1) home += ground.home[index];
   return {
     share: at.hot,
     hourly,
@@ -360,6 +385,9 @@ export function summarize(campus: Campus, ground: Ground, day: HeatDay, peak: nu
     mask,
     blocks,
     photo: Boolean(campus.photo),
+    covers,
+    open: home > 0 ? at.cells / home : 0,
+    version: campus.version ?? 0,
   };
 }
 
