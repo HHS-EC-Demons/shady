@@ -10,6 +10,7 @@ type Session = { ground: Ground; weather: Weather; backdrop: Backdrop };
 
 const KEEP = 4;
 const sessions = new Map<number, Session>();
+const looking = new Map<number, AbortController>();
 const scope = self as unknown as {
   onmessage: ((event: MessageEvent<Ask>) => void) | null;
   postMessage: (message: Answer, transfer?: Transferable[]) => void;
@@ -25,7 +26,27 @@ function keep(key: number, session: Session): void {
   }
 }
 
+function sight(ask: Extract<Ask, { kind: 'sight' }>): void {
+  const control = new AbortController();
+  looking.set(ask.id, control);
+  import('./look')
+    .then(({ look }) => look(ask.campus, control.signal))
+    .catch(() => null)
+    .then((found) => {
+      looking.delete(ask.id);
+      scope.postMessage({ id: ask.id, kind: 'sight', sight: control.signal.aborted ? null : found });
+    });
+}
+
 function answer(ask: Ask): void {
+  if (ask.kind === 'sight') {
+    sight(ask);
+    return;
+  }
+  if (ask.kind === 'cancel') {
+    looking.get(ask.target)?.abort();
+    return;
+  }
   if (ask.kind === 'close') {
     sessions.delete(ask.key);
     scope.postMessage({ id: ask.id, kind: 'ready' });

@@ -33,10 +33,11 @@ export function surfaceChoices(surface: Surface): Surface[] {
 
 export const SURFACE_ORDER: Surface[] = ['grass', 'asphalt', 'concrete', 'turf', 'court', 'track', 'soil', 'water', 'roof'];
 
-export type Patch = { surface: Surface; ring: Ring; label?: string };
+export type Patch = { surface: Surface; ring: Ring; label?: string; guessed?: boolean };
 export type Strip = { surface: Surface; width: number; line: Ring; label?: string };
 export type Block = { id: number; ring: Ring; height: number; guessed: boolean; home: boolean };
-export type Tree = { x: number; y: number; radius: number; height: number };
+export type Tree = { x: number; y: number; radius: number; height: number; photo?: boolean };
+export type Sighting = { source: string; date: string; fields: number[] };
 
 export type Campus = {
   name: string;
@@ -48,6 +49,7 @@ export type Campus = {
   strips: Strip[];
   blocks: Block[];
   trees: Tree[];
+  photo?: Sighting;
 };
 
 export type Ground = {
@@ -132,6 +134,19 @@ export function campusRadius(campus: Campus): number {
 export function campusMiddle(campus: Campus): Point {
   const box = extentOf(campus, 0);
   return [(box.minX + box.maxX) / 2, (box.minY + box.maxY) / 2];
+}
+
+export function treeAt(trees: Tree[], x: number, y: number): number {
+  let best = -1;
+  let gap = Infinity;
+  trees.forEach((tree, index) => {
+    const away = Math.hypot(tree.x - x, tree.y - y);
+    if (away <= Math.max(tree.radius, 2) && away < gap) {
+      gap = away;
+      best = index;
+    }
+  });
+  return best;
 }
 
 export function blockArea(block: Block): number {

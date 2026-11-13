@@ -356,7 +356,7 @@ export function buildCampus(name: string, place: string, center: LatLon, outline
         const played = sports(tags);
         let surface: Surface = tagged ?? 'grass';
         if (!tagged && played.some((sport) => COURT_SPORTS.includes(sport))) surface = 'court';
-        const patch: Patch = { surface, ring, label: pitchName(played) };
+        const patch: Patch = tagged || surface !== 'grass' ? { surface, ring, label: pitchName(played) } : { surface, ring, label: pitchName(played), guessed: true };
         patches.push(patch);
         clear.push(ring);
         if (played.some((sport) => FIELD_SPORTS.includes(sport))) fields.push({ patch, tagged: Boolean(tagged) });

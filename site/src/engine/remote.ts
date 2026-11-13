@@ -2,6 +2,7 @@ import { campusMiddle, type Campus, type Ground } from './campus';
 import { contactOf, type Contact } from './contact';
 import { roofOf, type RoofUnit } from './roof';
 import { openCampus, simulate, type Backdrop, type HeatDay, type Opened } from './heat';
+import type { Sight } from './look';
 import type { Grid } from './raster';
 import type { Obstacles } from './shade';
 import type { SunRay } from './sun';
@@ -10,7 +11,9 @@ import type { Weather } from './weather';
 export type Ask =
   | { id: number; kind: 'open'; key: number; campus: Campus; weather: Weather; reply: boolean }
   | { id: number; kind: 'simulate'; key: number; added: Obstacles }
-  | { id: number; kind: 'close'; key: number };
+  | { id: number; kind: 'close'; key: number }
+  | { id: number; kind: 'sight'; campus: Campus }
+  | { id: number; kind: 'cancel'; target: number };
 
 export type Answer =
   | {
@@ -30,6 +33,7 @@ export type Answer =
       paving: Float32Array;
     }
   | { id: number; kind: 'day'; temps: Uint8Array; light: Uint8Array; air: Float32Array }
+  | { id: number; kind: 'sight'; sight: Sight | null }
   | { id: number; kind: 'ready' }
   | { id: number; kind: 'gone' }
   | { id: number; kind: 'failed'; reason: string };
@@ -93,6 +97,29 @@ function send(index: number, make: (id: number) => Ask): Promise<Answer | null> 
       lane.waiting.delete(id);
       resolve(null);
     }
+  });
+}
+
+export function askSight(campus: Campus, signal: AbortSignal): Promise<Sight | null | undefined> {
+  const index = LANES - 1;
+  const lane = laneAt(index);
+  if (!lane) return Promise.resolve(undefined);
+  let asked = 0;
+  const answer = send(index, (id) => {
+    asked = id;
+    return { id, kind: 'sight', campus };
+  });
+  const cancel = () => {
+    try {
+      lane.worker.postMessage({ id: 0, kind: 'cancel', target: asked } satisfies Ask);
+    } catch {
+      return;
+    }
+  };
+  signal.addEventListener('abort', cancel, { once: true });
+  return answer.then((reply) => {
+    signal.removeEventListener('abort', cancel);
+    return reply && reply.kind === 'sight' ? reply.sight : undefined;
   });
 }
 

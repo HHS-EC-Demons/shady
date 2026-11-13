@@ -12,6 +12,7 @@ export default defineConfig({
   devToolbar: { enabled: false },
   vite: {
     plugins: [tailwindcss()],
+    worker: { format: 'es' },
     optimizeDeps: {
       include: [...icons.map((name) => `@phosphor-icons/react/dist/csr/${name}`), 'qrcode.react'],
     },
