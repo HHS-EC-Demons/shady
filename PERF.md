@@ -1,34 +1,63 @@
 # Performance
 
-Measured 2026-11-11 on a 2018 MacBook Pro in a headless browser. The canvases ask for the fastest chip, so on this machine every number below was drawn by the Radeon Pro 555X, not by the Intel UHD Graphics 630. An earlier version of this file said Intel. That was wrong: only a separate chip check ran on Intel.
-
-Add `gpu=low` to the page address to force the Intel chip. `checks/scroll-perf.js` now runs both chips and prints the chip name with every result. A clean Intel run is still to be recorded here.
-
-The tables below also predate the surface detail, building roofs, cars and people. They need a fresh run on a quiet machine.
+Measured 2026-11-12 on a 2018 MacBook Pro in headless Chrome. The page asks for the fast chip, the Radeon Pro 555X. Add `gpu=low` to the page address to force the Intel UHD Graphics 630, which stands in for a laptop with only integrated graphics. Every row names the chip that drew it. Passes 1 to 3 started with the one minute load average under 3. Pass 4 is a separate check run after the others and started at 3.0.
 
 ## Budget and result
 
 | Budget | Result |
 | --- | --- |
-| 60 fps while scrolling at 1080p on integrated graphics | Not measured yet on Intel. On the Radeon, 60 fps average and 60 fps at the 1% low |
-| Under 100 draw calls | 31 at the busiest beat |
-| Under 300k triangles | 77k at the busiest beat |
-| Initial JavaScript under 350 KB gzipped | 72 KB before the 3D code is asked for |
-| Largest Contentful Paint under 2.5 s | 116 ms on a local server, so network time comes on top |
-| HTML content visible before the 3D is ready | Heading painted at 72 ms, film live at 1.3 s |
+| 60 fps while scrolling at 1080p on integrated graphics | Intel UHD Graphics 630 at 1080p on the medium tier, 60 fps average and 60 fps at the 1% low in passes 2, 3 and 4, 55 fps average and 30 fps at the 1% low in pass 1 |
+| 60 fps while scrolling on the fast chip | Radeon Pro 555X at 1080p and at 1440 by 900 at 2x on the high tier, 60 fps average and 60 fps at the 1% low in all four passes |
+| Under 100 draw calls | 44 at the busiest beat on high, 38 on medium |
+| Under 300k triangles | 181k at the busiest beat on high, 112k on medium, both counting the shadow pass |
+| Initial JavaScript under 350 KB gzipped | 72 KB before the 3D code is asked for, from the earlier load test and not measured again |
+| Largest Contentful Paint under 2.5 s | 116 ms on a local server, from the earlier load test and not measured again |
+| HTML content visible before the 3D is ready | Heading painted at 72 ms and film live at 1.3 s, from the earlier load test and not measured again |
 
 ## Scroll test
 
-`checks/scroll-perf.js` scrolls the whole film at a steady 700 px a second and records every frame time. Run it from the project root with `playwright-cli run-code --filename=checks/scroll-perf.js` while the dev server is on port 4392 and nothing else is using the machine.
+`checks/scroll-perf.js` scrolls the whole film at a steady 700 px a second and records every frame time. Run it from the project root with `playwright-cli -s=perf run-code --filename=checks/scroll-perf.js` while the dev server is on port 4392 and nothing else is using the machine.
 
-| Run | Frames | Average | 1% low | Worst frame | Frames over 20 ms | Pixel ratio used |
-| --- | --- | --- | --- | --- | --- | --- |
-| Laptop 1920 by 1080 | 581 | 60 fps | 60 fps | 17 ms | 0 | 1.0 |
-| Laptop 1440 by 900 at 2x | 487 | 60 fps | 60 fps | 33 ms | 1 | 1.5 |
-| Phone 390 by 844 at 3x | 459 | 60 fps | 60 fps | 33 ms | 1 | 1.5 |
-| Laptop 1080p, CPU slowed 4 times | 522 | 54 fps | 15 fps | 150 ms | 34 | 1.0 |
+The low power chip runs go first. An Intel run straight after a Radeon page in the same browser came out at 37 fps on 1080p and 46 fps at 1440 by 900, both after falling to the low tier, while the same runs before any Radeon page held 59 to 60 fps on medium. The likely cause is macOS switching graphics chips when the Radeon page closes, so that order would measure the switch and not the site.
 
-The slowed run is the weak spot. Before the last fix it averaged 45 fps with 107 slow frames.
+Pass 2
+
+| Run | Chip | Frames | Average | 1% low | Worst frame | Frames over 20 ms | Readout |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Laptop 1920 by 1080 with `gpu=low` | Intel UHD Graphics 630 | 581 | 60 fps | 60 fps | 17 ms | 0 | 38 calls, 112k tris, dpr 1.00, medium |
+| Laptop 1440 by 900 at 2x with `gpu=low` | Intel UHD Graphics 630 | 482 | 59 fps | 30 fps | 50 ms | 6 | 38 calls, 112k tris, dpr 1.25, medium |
+| Laptop 1920 by 1080 | Radeon Pro 555X | 581 | 60 fps | 60 fps | 17 ms | 0 | 44 calls, 181k tris, dpr 1.00, high |
+| Laptop 1440 by 900 at 2x | Radeon Pro 555X | 489 | 60 fps | 60 fps | 17 ms | 0 | 44 calls, 181k tris, dpr 1.50, high |
+| Phone 390 by 844 at 3x | Radeon Pro 555X | 459 | 60 fps | 60 fps | 17 ms | 0 | 44 calls, 181k tris, dpr 1.50, high |
+| Laptop 1080p with the CPU slowed 4 times | Radeon Pro 555X | 581 | 60 fps | 60 fps | 17 ms | 0 | 44 calls, 181k tris, dpr 1.00, high |
+
+Pass 3 matched pass 2 except two rows. Intel at 1440 by 900 had 483 frames, 59 fps, 60 fps at the 1% low, a worst frame of 50 ms and 4 slow frames. Radeon at 1440 by 900 had 486 frames, 60 fps, 60 fps at the 1% low, a worst frame of 33 ms and 3 slow frames.
+
+Pass 1 ran first in a fresh browser and the load rose from 2.3 to 5.1 during it. Its Radeon rows matched pass 2. Intel at 1080p had 537 frames, 55 fps, 30 fps at the 1% low, a worst frame of 67 ms and 42 slow frames. Intel at 1440 by 900 had 463 frames, 57 fps, 30 fps at the 1% low, a worst frame of 67 ms and 24 slow frames. Both stayed on medium.
+
+Pass 4 ran in a fresh browser after the yard canvas change below, with the load at 3.0 at the start and 4.3 at the end. Every row was 60 fps average and 60 fps at the 1% low with a worst frame of 17 ms and no slow frames, except Intel at 1440 by 900 with 486 frames, a worst frame of 33 ms and 3 slow frames.
+
+The phone row is this laptop at phone size. It reports the high tier because headless Chrome has no touch pointer.
+
+## GPU time per frame
+
+`checks/gpu-time.js` loads the film with `?perf=gpu`. That adds two `EXT_disjoint_timer_query_webgl2` queries a frame, one around the shadow pass and one around the main pass, and counts calls and triangles for each scene part. Each screen runs twice, the second time with `hide=ground,shade`, and the difference is the ground with its shadows. A query for every draw call does not work on this machine. Each query splits the Metal render pass, the MSAA buffers get stored and reloaded, and a 9k triangle draw then reads as 8 ms.
+
+Before is a build of the old code, after is the current build, both served as static files. Values are mean milliseconds per frame over the whole scroll. The before pass ran the Radeon screens first.
+
+| Screen | Chip and tier | Before p50 and p99 | Before shadow, main, ground | After p50 and p99 | After shadow, main, ground |
+| --- | --- | --- | --- | --- | --- |
+| 1920 by 1080 | Intel UHD Graphics 630, medium | 22.1 and 26.7 | 3.4, 18.3, 8.2 | 14.2 and 17.6 | 0.2, 13.9, 4.7 |
+| 1440 by 900 at 2x | Intel UHD Graphics 630, medium | 29.3 and 36.0 | 4.5, 24.2, 11.1 | 13.7 and 18.9 | 0.2, 13.4, 4.0 |
+| 1920 by 1080 | Radeon Pro 555X, high | 7.5 and 9.9 | 3.3, 4.2, 1.9 | 5.4 and 6.7 | 1.0, 4.5, 2.0 |
+| 1440 by 900 at 2x | Radeon Pro 555X, high | 16.1 and 17.8 | 5.6, 9.9, 4.5 | 7.1 and 9.2 | 1.0, 6.0, 2.8 |
+
+| Pass | Before on high | Before on medium | After on high | After on medium |
+| --- | --- | --- | --- | --- |
+| Shadow | 14 calls, 90k tris | 14 calls, 56k tris | 15 calls, 77k tris | 9 calls, 31k tris |
+| Main | 24 calls, 115k tris | 24 calls, 81k tris | 24 calls, 102k tris | 24 calls, 79k tris |
+
+Keeping the drawing buffer on the film canvas cut the Intel shadow time at 1080p from 3.4 ms to 0.2 ms, and three.js clears it every frame anyway. The likely reason is that Chrome clears the canvas before the first draw call of a frame. That first draw was in the shadow pass, so the clear opened and stored an MSAA pass of its own.
 
 ## Profile of the slowed run
 
@@ -52,22 +81,30 @@ The heat fill used to recompute all 131 thousand grid cells every frame. It now 
 | Largest lazy file | three.js, React Three Fiber and drei at 293 KB gzipped |
 | Film live | 1.3 s |
 
+On the live site at https://hhs-ec-demons.github.io/shady/ the film was live 1.7 to 2.1 s after the page was requested, measured from this laptop on 2026-11-12.
+
 ## Going back to the landing page
 
 | Server | Before | After |
 | --- | --- | --- |
 | Dev | 6.5 to 8.0 s | 0.7 to 0.8 s |
 | Production build | not measured | 0.37 to 0.43 s |
+| Live site on GitHub Pages | not measured | 0.66 to 0.75 s |
 
 The story numbers are cached on the server, the built model and simulations are kept in memory between page changes, the page transition is 260 ms, and icons are imported one by one.
 
 ## What keeps it fast
 
 - The canvas renders on demand. A frame is drawn only when scroll, the pointer, an animation or the model changes something. An idle page draws nothing.
-- Pixel ratio is capped by tier at 2, 1.5 or 1. A frame rate drop steps the tier down unless the visitor picked one in the footer.
-- One shadow casting light. Its shadow area follows the view, so close ups get sharp shadows from the same map.
-- The ground is one draw call of about 14 thousand vector triangles, so edges stay sharp at any zoom with no large textures.
-- Film trees are two instanced meshes using a lighter 683 triangle crown. Neighbor buildings are one merged mesh.
+- Tiers set the pixel ratio cap at 1.5, 1.25 or 1, the shadow map at 3072, 2048 or 1024, and props at 300 cars and 150 people, 140 cars and 70 people, or none. A chip named Intel starts on medium. A frame rate drop steps down one tier, waits 5 seconds before it can step again, and does nothing if the visitor picked a tier in the footer. A tier change only resizes the canvas and the shadow map and rebuilds the props.
+- One shadow casting light. Its shadow area follows the view, so close ups get sharp shadows from the same map. Cars, people, poles, nets and goalposts cast shadows only on high. On medium cars keep their contact blobs.
+- Props hide when the nearest car would be under 3 pixels long. On the current campus the nearest car is still about 7 pixels in the widest film shots at 1080p, so they stay.
+- The ground is one draw call of about 19 thousand vector triangles, so edges stay sharp at any zoom with no large textures. In the film a stencil test lets each pixel take only its top ground layer, the ground samples the shadow map itself instead of a second full screen shadow plane, and the backdrop only fills pixels the ground left empty.
+- Close up ground detail sits behind real branches on the pixel footprint. Noise, joints, mowing bands and curb relief run only when a pixel is smaller than the feature, sheen fades out past 0.6 m a pixel, and curb relief strips collapse in the vertex shader once relief can no longer show.
+- The heat texture uploads before the frame starts, so it never breaks the render pass.
+- The film and yard canvases keep their drawing buffer on devices with a mouse or trackpad, so Chrome does not clear it in a pass of its own. Touch devices keep the browser default because no phone has been measured.
+- The shade sail is drawn at near zero size from the first frame, so its shaders compile at load instead of mid scroll.
+- Film trees and mapped trees use the lighter 683 triangle crown. Neighbor buildings are one merged mesh.
 - No allocation inside frame callbacks.
 - The heat simulation runs once at load. Scrolling only blends finished results.
 - Three.js loads after first paint through a lazy import.
@@ -78,4 +115,4 @@ The story numbers are cached on the server, the built model and simulations are 
 - A real mid range phone. The phone row above is this laptop at phone size.
 - A cold network. All load numbers are from a local server.
 - Safari and Firefox.
-- The Yard page under the same scroll test.
+- The Yard page under the same scroll test. It uses the same stencil and kept buffer path as the film, checked by eye on close ups and not timed.
