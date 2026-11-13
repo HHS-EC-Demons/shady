@@ -39,7 +39,10 @@ export type Block = { id: number; ring: Ring; height: number; guessed: boolean; 
 export type Tree = { x: number; y: number; radius: number; height: number; photo?: boolean };
 export type Sighting = { source: string; date: string; fields: number[] };
 
+export const CAMPUS_VERSION = 2;
+
 export type Campus = {
+  version?: number;
   name: string;
   place: string;
   center: { lat: number; lon: number };
@@ -51,6 +54,10 @@ export type Campus = {
   trees: Tree[];
   photo?: Sighting;
 };
+
+export function outdated(campus: Campus): boolean {
+  return (campus.version ?? 0) < CAMPUS_VERSION;
+}
 
 export type Ground = {
   grid: Grid;

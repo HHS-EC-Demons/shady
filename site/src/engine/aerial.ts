@@ -1,4 +1,4 @@
-import { atHome, type Campus, type Tree } from './campus';
+import { atHome, outdated, type Campus, type Tree } from './campus';
 import type { Sight } from './look';
 import { askSight } from './remote';
 
@@ -12,6 +12,14 @@ const REACH = { south: 24.4, north: 49.5, west: -125, east: -66.8 };
 
 export function covered(center: { lat: number; lon: number }): boolean {
   return center.lat >= REACH.south && center.lat <= REACH.north && center.lon >= REACH.west && center.lon <= REACH.east;
+}
+
+export function behind(campus: Campus): boolean {
+  return outdated(campus) || (!campus.photo && covered(campus.center));
+}
+
+export function newer(next: Campus, now: Campus): boolean {
+  return (next.version ?? 0) > (now.version ?? 0) || (Boolean(next.photo) && !now.photo);
 }
 
 export function mergeTrees(campus: Campus, seen: Tree[]): Tree[] {

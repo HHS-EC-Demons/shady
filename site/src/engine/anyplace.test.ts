@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { CROP_SIZE, POINT_SIZE, areaOf, clipRing, plannedBounds, ringOf, spanOf, squareAround, squareArea, type LatLon } from './area';
+import { CAMPUS_VERSION } from './campus';
 import { KEEP_PLACES, PLACE_LIFE, fresh, placeKey, prune, samePlace } from './memory';
 import { insideRing, ringArea, type Ring } from './geometry';
 import { MOST_FOUND, buildCampus, rankPlaces, tidy, withHoles, type Element, type PhotonFeature } from './osm';
@@ -184,6 +185,7 @@ describe('buildings with holes', () => {
       },
     ]);
     expect(campus.blocks).toHaveLength(1);
+    expect(campus.version).toBe(CAMPUS_VERSION);
     const ring = campus.blocks[0].ring;
     expect(ringArea(ring)).toBeCloseTo(200 * 160 - 120 * 80, -2);
     expect(insideRing(ring, 0, 0)).toBe(false);

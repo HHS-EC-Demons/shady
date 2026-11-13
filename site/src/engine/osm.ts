@@ -1,5 +1,5 @@
 import { areaOf, boundsOf, covers, padded, plannedBounds, squareArea, touches, type Area, type Bounds, type LatLon } from './area';
-import type { Block, Campus, Patch, Strip, Surface, Tree } from './campus';
+import { CAMPUS_VERSION, type Block, type Campus, type Patch, type Strip, type Surface, type Tree } from './campus';
 import { boxOf, insideRing, ringArea, type Point, type Ring } from './geometry';
 import { Stopped, firstOf, linked, type Source } from './race';
 
@@ -398,7 +398,7 @@ export function buildCampus(name: string, place: string, center: LatLon, outline
     if (tracks.some((ring) => insideRing(ring, x, y))) field.patch.surface = 'turf';
   }
 
-  return { name, place, center, boundary, clear, patches, strips, blocks, trees };
+  return { version: CAMPUS_VERSION, name, place, center, boundary, clear, patches, strips, blocks, trees };
 }
 
 
@@ -602,7 +602,7 @@ export async function loadCampus(found: Found, headers: Record<string, string> =
   const contents = (box: Bounds, signal: AbortSignal) => firstOf(contentsSources(box, headers), gap, deadline, signal);
   try {
     if (found.kind === 'node') {
-      const area = squareArea(found);
+      const area = squareArea({ lat: found.lat, lon: found.lon });
       const want = padded(area.bounds);
       return campusOf(found, area, tidy(await contents(want, controller.signal), want));
     }
