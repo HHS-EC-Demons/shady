@@ -9,7 +9,7 @@ Measured 2026-11-12 on a 2018 MacBook Pro in headless Chrome. The page asks for 
 | 60 fps while scrolling at 1080p on integrated graphics | Intel UHD Graphics 630 at 1080p on the medium tier, 60 fps average and 60 fps at the 1% low in passes 2, 3 and 4, 55 fps average and 30 fps at the 1% low in pass 1 |
 | 60 fps while scrolling on the fast chip | Radeon Pro 555X at 1080p and at 1440 by 900 at 2x on the high tier, 60 fps average and 60 fps at the 1% low in all four passes |
 | Under 100 draw calls | 48 at the busiest beat on high and 41 on medium, up from 44 and 38 |
-| Under 300k triangles | 262k at the busiest beat on high and 155k on medium with 474 standing trees, both counting the shadow pass, up from 181k and 112k with none |
+| Under 300k triangles | 263k at the busiest beat on high and 155k on medium with 478 standing trees, both counting the shadow pass, up from 181k and 112k with none |
 | Initial JavaScript under 350 KB gzipped | 72 KB before the 3D code is asked for, from the earlier load test and not measured again |
 | Largest Contentful Paint under 2.5 s | 116 ms on a local server, from the earlier load test and not measured again |
 | HTML content visible before the 3D is ready | Heading painted at 72 ms and film live at 1.3 s, from the earlier load test and not measured again |
@@ -43,7 +43,7 @@ The phone row is this laptop at phone size. It reports the high tier because hea
 
 ## Trees already standing
 
-Heritage now carries 474 trees found in the aerial photo, where it had none from the map before. Standing trees use a 79 triangle crown and a 10 triangle trunk in a quieter green, so they are told apart from planned trees and stay cheap. The high tier draws at most 600 of them, medium 250 and low 150, campus trees first and then the largest. Below the high tier they skip the soft blob under each tree, and their trunks never cast shadows.
+Heritage now carries 478 trees found in the aerial photo, where it had none from the map before. Four of them came with the rebuild after the merge, in a courtyard of the main building that the map now draws as open ground. Standing trees use a 79 triangle crown and a 10 triangle trunk in a quieter green, so they are told apart from planned trees and stay cheap. The high tier draws at most 600 of them, medium 250 and low 150, campus trees first and then the largest. Below the high tier they skip the soft blob under each tree, and their trunks never cast shadows.
 
 Scroll test on 2026-11-13 against the production build on `astro preview`, each run started with the one minute load under 3 or 4 as noted. Before is the same build with the old campus file and no standing trees.
 
@@ -60,7 +60,7 @@ The before pass started at a load of 3.3 and ended at 11. The after pass started
 
 ## Reading the aerial photo
 
-When a US school is picked, `aerial.ts` asks the Planetary Computer index for the newest NAIP photo over the campus, then reads only the tiles under the campus from the 1.2 m overview with range requests. The geotiff reader and the finder load only at that moment, 17 KB and 7 KB gzipped, in the engine worker. The finder takes 0.1 to 0.4 s of worker time on these campuses and 1.1 s on the 1.1 km Allen High School campus. The step gives up after 8 seconds and the school loads without it.
+When a US school is picked, `aerial.ts` asks the Planetary Computer index for the newest NAIP photo over the campus, then reads only the tiles under the campus from the 1.2 m overview with range requests. The geotiff reader and the finder load only at that moment, 17 KB and 7 KB gzipped, in the engine worker. The finder takes 0.1 to 0.4 s of worker time on these campuses and 1.1 s on the 1.1 km Allen High School campus. The school waits at most 2.5 s for the photo. After that it shows without the standing trees, the photo keeps loading in the background for up to 60 s, and the trees then appear without changing the time, the tool or the plan.
 
 | School | Photo | Bytes read | Seconds to read |
 | --- | --- | --- | --- |
@@ -70,7 +70,13 @@ When a US school is picked, `aerial.ts` asks the Planetary Computer index for th
 | Desert Vista High School, Phoenix AZ | June 2025 | 3.0 MB | 2.1 s |
 | Allen High School, Allen TX | July 2022 | 4.3 MB | 2.5 s |
 
-The photo is read while the weather day loads, so the school appears about 2.5 s later than before. In the yard on the production build, Roosevelt High School took 15.4 s and 17.0 s from the pick to the model with the photo and 12.9 s with the photo hosts blocked. Most of that time is the map servers, which reset connections during these runs. Heritage reads nothing at run time because its trees are baked into the campus file.
+The photo is read while the weather day loads. Before the merge Roosevelt High School took 15.4 s and 17.0 s from the pick to the model with the photo and 12.9 s with the photo hosts blocked, mostly waiting on map servers that reset connections. After the merge, on 2026-11-13 with another build holding the one minute load between 67 and 101, picking it from the landing page showed its name after 5.5 s and its 54 photo trees after 5.7 s, in 4 map requests, 2 weather requests and 10 photo requests. Opening it again from the browser cache took 1.5 to 2.1 s in four runs at loads between 45 and 190, with no map or photo requests. With every photo request held back 5 s the model showed after 4.9 s without the photo trees and they arrived after 40 s, because the photo reader makes about ten requests one after another. Heritage reads nothing at run time because its trees are baked into the campus file.
+
+## After the merge
+
+On 2026-11-13 the merged build was checked on `astro preview` at 1920 by 1080. The busiest film beat drew 48 calls and 263k triangles on high and 41 calls and 155k triangles on medium, the same as before the merge apart from 1k triangles for the four new trees. The yard at Heritage drew 39 calls and 213k triangles on high and 25 calls and 65k triangles on medium. Ten planned trees raised that to 89 calls and 264k triangles on high and 75 calls and 115k triangles on medium, because each planned tree is still its own set of draw calls.
+
+One scroll pass was taken with the one minute load at 33 at the start and 56 at the end, so it measures the shared machine more than the site. Intel at 1080p gave 352 frames, 36 fps, 20 fps at the 1% low and 211 slow frames, and fell to the low tier. Intel at 1440 by 900 gave 282 frames, 35 fps, 15 fps at the 1% low and 183 slow frames on medium. Radeon at 1080p gave 470 frames, 49 fps, 20 fps at the 1% low and 96 slow frames. Radeon at 1440 by 900 gave 487 frames at 60 fps with 2 slow frames, and the phone size gave 460 frames at 60 fps with none. The run with the processor slowed 4 times gave 175 frames at 18 fps and fell to medium. These rows need to be taken again on a quiet machine before they replace the passes above.
 
 ## GPU time per frame
 
@@ -158,6 +164,8 @@ After is the new production build on the same local preview with the same Lighth
 After the deploy the live site was measured once per page with the same settings. Home scored 93 with an LCP of 0.9 s, 330 ms of total blocking time, a longest task of 155 ms and 3.7 s to interactive. Yard scored 85 with an LCP of 2.2 s, 510 ms of total blocking time, a longest task of 206 ms and 4.0 s to interactive. Another build started on this machine during the yard run and the load reached 9 by its end.
 
 With 474 standing trees in the Heritage file the same preview gave these results on 2026-11-13, three runs per page, each started with the one minute load under 3. Home scored 92, 89 and 86 with 266, 339 and 552 ms of total blocking time. Yard scored 85, 85 and 86 with an LCP of 3.1 s, up from 2.9 s, because the campus file it waits for grew from 44 KB to 74 KB. Plan scored 95, 94 and 95. Accessibility stayed at 100 on all three pages. One extra home run started at a load of 4 scored 68 with a 2.4 s task that Lighthouse could not attribute to any script, and two home runs with the old campus file on the same build scored 90 and 91.
+
+After the merge on 2026-11-13 only one run per page was taken, because another build kept the one minute load far above 4 for over an hour. Home scored 73 with an LCP of 2.7 s and 1,098 ms of total blocking time, started at a load of 153. Yard scored 38 with an LCP of 7.0 s, 7,525 ms of total blocking time and a 4.1 s task inside React, started at 93. Plan scored 92 with an LCP of 2.6 s and 270 ms of total blocking time, started at 62. Accessibility stayed at 100 on all three pages. Lighthouse slows the processor 4 times on top of the shared machine, so these runs cannot be compared with the tables above and need to be taken again on a quiet machine. The rebuilt campus file is 73 KB and 14.5 KB gzipped, down from 74 KB and 15.2 KB.
 
 The first live table above was also taken on a busier machine than the local runs, which is why its blocking times are far higher than the local before table for the same build.
 
