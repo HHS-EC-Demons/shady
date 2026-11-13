@@ -22,7 +22,7 @@ const links = [
 const fullTitle = title === 'Shady' ? 'Shady' : `${title} | Shady`;
 const home = Astro.site ?? Astro.url;
 const share = new URL(`${base}og.png?v=3`, home).href;
-const address = new URL(Astro.url.pathname, home).href;
+const address = new URL(Astro.url.pathname.replace(/(index)?\.html$/, ''), home).href;
 ---
 
 <!doctype html>
