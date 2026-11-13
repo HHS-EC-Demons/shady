@@ -71,15 +71,15 @@ function Legend() {
   );
 }
 
-type ListProps = { rows: Row[]; base: string; stalled: boolean; onOpen: (school: Found) => void; onActive: (key: string | null) => void };
+type ListProps = { rows: Row[]; base: string; stalled: boolean; minute: number; onOpen: (school: Found) => void; onActive: (key: string | null) => void };
 
-function Schools({ rows, base, stalled, onOpen, onActive }: ListProps) {
+function Schools({ rows, base, stalled, minute, onOpen, onActive }: ListProps) {
   if (rows.length === 0) return null;
   return (
     <ol className="m-0 list-none border-b border-rule p-0" aria-label="Schools, hottest first">
       {rows.map((row, index) => {
         const key = schoolKey(row.school);
-        const percent = row.summary ? percentOf(row.summary.share) : 0;
+        const percent = row.summary ? percentOf(shareAt(row.summary, minute)) : 0;
         return (
           <li key={key} className="border-t border-rule" data-status={row.status} data-photo={row.summary?.photo ? 'yes' : undefined}>
             <a
@@ -291,7 +291,7 @@ export default function District({ base }: { base: string }) {
             {weather && <p className="text-base text-soft">{dayLabel(weather.date)}</p>}
           </div>
         )}
-        <Schools rows={rows} base={base} stalled={failed} onOpen={open} onActive={() => undefined} />
+        <Schools rows={rows} base={base} stalled={failed} minute={minute} onOpen={open} onActive={() => undefined} />
       </section>
     );
   }
@@ -373,7 +373,7 @@ export default function District({ base }: { base: string }) {
         </div>
       </section>
       <section className="shell w-full max-w-[1180px] pb-20 pt-8">
-        <Schools rows={rows} base={base} stalled={failed} onOpen={open} onActive={setActive} />
+        <Schools rows={rows} base={base} stalled={failed} minute={minute} onOpen={open} onActive={setActive} />
       </section>
     </>
   );
