@@ -6,6 +6,7 @@ import type { Yard } from './controller';
 import { along, axisHeading, bandPads, courts, fields, lightPoles, onRoof, parkingStalls, thin, walkers, type Area } from './layout';
 import { BLOB_LIFT, buildBlob } from './models';
 import { TIERS, type PropLevel } from './quality';
+import { keep, take } from './stages';
 
 type Vec = [number, number, number];
 type Placement = { x: number; y: number; heading: number; stretch?: number; color?: THREE.Color };
@@ -578,6 +579,26 @@ function blobs(yard: Yard, blob: ReturnType<typeof buildBlob>, cars: Placement[]
   return mesh;
 }
 
+function placeAll(yard: Yard, level: NonNullable<PropLevel>): Record<Kind, Placement[]> {
+  const nets = placeNets(yard);
+  return {
+    cars: placeCars(yard, level.cars),
+    poles: placePoles(yard),
+    nets,
+    posts: nets,
+    goals: placeGoals(yard),
+    people: thin(placePeople(yard, level.light), level.people),
+  };
+}
+
+function placedKey(level: NonNullable<PropLevel>): string {
+  return `props ${level.cars} ${level.people} ${level.light}`;
+}
+
+export function primeProps(yard: Yard, level: PropLevel = TIERS.high.props): void {
+  if (level) keep(yard, placedKey(level), () => placeAll(yard, level));
+}
+
 export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: PropLevel }) {
   const models = useMemo(buildModels, []);
   const blob = useMemo(buildBlob, []);
@@ -594,15 +615,7 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
   );
   const meshes = useMemo(() => {
     if (!level) return [];
-    const nets = placeNets(yard);
-    const placed: Record<Kind, Placement[]> = {
-      cars: placeCars(yard, level.cars),
-      poles: placePoles(yard),
-      nets,
-      posts: nets,
-      goals: placeGoals(yard),
-      people: thin(placePeople(yard, level.light), level.people),
-    };
+    const placed = take(yard, placedKey(level), () => placeAll(yard, level));
     const shades = blobs(yard, blob, placed.cars);
     return [
       ...KINDS.flatMap((kind) => {

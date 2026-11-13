@@ -6,9 +6,8 @@ import { ThermometerIcon } from '@phosphor-icons/react/dist/csr/Thermometer';
 import { TrashIcon } from '@phosphor-icons/react/dist/csr/Trash';
 import { TreeIcon } from '@phosphor-icons/react/dist/csr/Tree';
 import { UmbrellaIcon } from '@phosphor-icons/react/dist/csr/Umbrella';
-import { Canvas } from '@react-three/fiber';
 import { animate, useReducedMotion } from 'motion/react';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
@@ -18,14 +17,15 @@ import { SURFACES, surfaceChoices, type Campus, type Surface } from '@/engine/ca
 import { centerOf } from '@/engine/geometry';
 import { DAY_END, DAY_START, RAMP, TOUCH_LIMIT } from '@/engine/heat';
 import { loadCampus, type Found } from '@/engine/osm';
+import { warmUp } from '@/engine/remote';
 import { clockLabel } from '@/engine/sun';
 import { hottestDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
-import { SQUARE_FEET, YEARS, Yard, type Tool } from './controller';
-import { PerformanceMonitor } from '@react-three/drei';
-import { TIERS, keepFrame, powerChoice, quality } from './quality';
-import { Scene, probeHeight, sunReach } from './Scene';
+import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Tool } from './controller';
+import { quality } from './quality';
 import { SchoolPicker } from './SchoolPicker';
 import { keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
+
+const YardCanvas = lazy(() => import('./YardCanvas'));
 
 type Kept = { key: string; bundle: Bundle; weather: Weather; yard: Yard };
 
@@ -109,9 +109,24 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first }: Lo
   const tier = useSyncExternalStore(quality.subscribe, quality.snapshot, quality.server);
   useSyncExternalStore(yard.subscribe, yard.snapshot, yard.snapshot);
   const still = useReducedMotion();
+  const [drawn, setDrawn] = useState(false);
+  const [painted, setPainted] = useState(false);
 
   useEffect(() => {
-    if (still || !first.current) return;
+    let timer = 0;
+    let frame = window.requestAnimationFrame(() => {
+      frame = window.requestAnimationFrame(() => {
+        timer = window.setTimeout(() => setPainted(true), 60);
+      });
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!drawn || still || !first.current) return;
     first.current = false;
     const target = yard.minute;
     yard.setMinute(yard.sunrise);
@@ -127,7 +142,7 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first }: Lo
       sweep.stop();
       window.removeEventListener('pointerdown', stop);
     };
-  }, [yard, still]);
+  }, [yard, still, drawn]);
 
   useEffect(() => {
     const key = (event: KeyboardEvent) => {
@@ -219,19 +234,12 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first }: Lo
         <p className="sr-only" role="status" aria-live="polite">
           {said}
         </p>
-        <Canvas
-          shadows
-          flat
-          frameloop="demand"
-          dpr={[1, TIERS[tier].dpr]}
-          camera={{ fov: 30, near: 5, far: 9000, position: [-300, 420, 600] }}
-          gl={{ stencil: true, preserveDrawingBuffer: keepFrame(), powerPreference: powerChoice() }}
-          style={{ position: 'absolute', inset: 0, cursor: yard.tool === 'look' ? undefined : 'crosshair' }}
-          aria-hidden="true"
-        >
-          <PerformanceMonitor onDecline={() => quality.lower()} />
-          <Scene yard={yard} layer={layer} shadow={TIERS[tier].shadow} texture={TIERS[tier].texture} props={TIERS[tier].props} />
-        </Canvas>
+        {painted && (
+          <Suspense fallback={null}>
+            <YardCanvas yard={yard} layer={layer} tier={tier} drawn={drawn} onReady={() => setDrawn(true)} />
+          </Suspense>
+        )}
+        {!drawn && <Skeleton className="absolute inset-0 rounded-none bg-muted" />}
 
         <div ref={layer} className="pointer-events-none absolute inset-0 overflow-hidden">
           {hours.map((hour) => (
@@ -462,32 +470,48 @@ export default function YardStage({ base }: { base: string }) {
   const home = useRef('Heritage High School');
 
   const first = useRef(true);
+  const turns = useRef(0);
 
-  const show = (next: Bundle, live?: Weather, minute?: number, raising?: number) => {
+  const show = async (next: Bundle, live?: Weather, minute?: number, raising?: number): Promise<void> => {
+    turns.current += 1;
+    const turn = turns.current;
     bundle.current = next;
     const weather = live ?? next.weather;
     const key = keyOf(next.campus, weather);
     const same = kept !== null && kept.key === key && kept.bundle.campus === next.campus && kept.weather === weather ? kept : null;
-    const built = same ? same.yard : new Yard(next.campus, weather);
-    if (!same) {
+    let built: Yard;
+    let previous: Yard | null = null;
+    if (same) {
+      built = same.yard;
+    } else {
+      built = await Yard.open(next.campus, weather);
       restorePlan(built);
+      await built.settled();
+      if (turn !== turns.current) {
+        built.close();
+        return;
+      }
+      previous = kept ? kept.yard : null;
       kept = { key, bundle: next, weather, yard: built };
     }
+    if (turn !== turns.current) return;
     if (raising !== undefined) built.pickBlock(raising);
     if (minute !== undefined) built.setMinute(minute);
     else if (live) built.setMinute(minuteNow(live));
     if (import.meta.env.DEV) (window as unknown as { yard: Yard }).yard = built;
     setYard(built);
+    if (previous && previous !== built) previous.close();
   };
 
   useEffect(() => {
     let live = true;
+    warmUp();
     const asked = new URLSearchParams(window.location.search).get('school');
     const ready = kept && kept.weather === kept.bundle.weather ? Promise.resolve(kept.bundle) : loadBundle(base);
     ready
       .then((file) => {
         if (!live) return;
-        show(file);
+        void show(file);
         if (!asked) return;
         window.history.replaceState(null, '', window.location.pathname);
         try {
@@ -541,7 +565,7 @@ export default function YardStage({ base }: { base: string }) {
       await new Promise((resolve) => window.setTimeout(resolve, 40));
       setDay('hottest');
       first.current = true;
-      show(next);
+      await show(next);
       setPicking(false);
     } catch {
       setNote('The map did not load. Try again.');
@@ -556,7 +580,7 @@ export default function YardStage({ base }: { base: string }) {
     const patches = current.campus.patches.map((item, index) => (index === patch ? { ...item, surface } : item));
     const next = { campus: { ...current.campus, patches }, weather: current.weather };
     keepSchool(next);
-    show(next, yard.weather.live ? yard.weather : undefined, yard.minute);
+    void show(next, yard.weather.live ? yard.weather : undefined, yard.minute);
   };
 
   const raise = (block: number, height: number) => {
@@ -565,7 +589,7 @@ export default function YardStage({ base }: { base: string }) {
     const blocks = current.campus.blocks.map((item, index) => (index === block ? { ...item, height, guessed: false } : item));
     const next = { campus: { ...current.campus, blocks }, weather: current.weather };
     keepSchool(next);
-    show(next, yard.weather.live ? yard.weather : undefined, yard.minute, block);
+    void show(next, yard.weather.live ? yard.weather : undefined, yard.minute, block);
   };
 
   const change = async (wanted: Day) => {
@@ -573,13 +597,13 @@ export default function YardStage({ base }: { base: string }) {
     if (!current || wanted === day) return;
     if (wanted === 'hottest') {
       setDay('hottest');
-      show(current);
+      void show(current);
       return;
     }
     try {
       const live = await todayWeather(current.campus.center.lat, current.campus.center.lon);
       setDay('today');
-      show(current, live);
+      void show(current, live);
     } catch {
       setDay('hottest');
     }

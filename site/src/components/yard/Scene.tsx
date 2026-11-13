@@ -1,17 +1,18 @@
 import { Edges, Line, OrbitControls } from '@react-three/drei';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { animate } from 'motion/react';
-import { useEffect, useMemo, useRef, useSyncExternalStore, type RefObject } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
 import type { Block } from '@/engine/campus';
 import { CANOPY_FLATTEN, type Sail } from '@/engine/shade';
-import { treeHeight, treeRadius, type PlanTree, type Yard } from './controller';
-import { Ground } from './ground';
+import { probeHeight, sunReach, treeHeight, treeRadius, type PlanTree, type Yard } from './controller';
+import { Ground, primeGround } from './ground';
 import { BLOB_LIFT, buildBlob, buildBlock, buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint, type BlockModel } from './models';
-import { Props } from './props';
+import { Props, primeProps } from './props';
 import { TIERS, type PropLevel } from './quality';
+import { Prime, Stages, keep, take } from './stages';
 
 const INK = '#12261c';
 const LEAF = '#2f6243';
@@ -39,27 +40,33 @@ function groundPoint(event: ThreeEvent<PointerEvent>): THREE.Vector3 | null {
   return event.ray.intersectPlane(FLOOR, spot);
 }
 
-export { Ground } from './ground';
+export { Ground, primeGround } from './ground';
 
 function prism(yard: Yard, block: Block, tint?: THREE.Color): BlockModel {
   const footprint = block.ring.map(([x, y]): [number, number] => [x - yard.middle[0], y - yard.middle[1]]);
   return buildBlock(footprint, block.height, tint ? { tint } : { home: true });
 }
 
+function shellsOf(yard: Yard) {
+  const mine = yard.campus.blocks
+    .map((block, index) => ({ block, index }))
+    .filter((item) => item.block.home)
+    .map((item) => ({ ...item, ...prism(yard, item.block) }));
+  const others = yard.campus.blocks
+    .map((block, index) => ({ block, index }))
+    .filter((item) => !item.block.home)
+    .map(({ block, index }) => prism(yard, block, NEIGHBORS[index % NEIGHBORS.length]).geometry);
+  const merged = others.length > 0 ? mergeGeometries(others) : null;
+  for (const other of others) other.dispose();
+  return { home: mine, away: merged };
+}
+
+export function primeBlocks(yard: Yard): void {
+  keep(yard, 'shells', () => shellsOf(yard));
+}
+
 export function Blocks({ yard }: { yard: Yard }) {
-  const { home, away } = useMemo(() => {
-    const mine = yard.campus.blocks
-      .map((block, index) => ({ block, index }))
-      .filter((item) => item.block.home)
-      .map((item) => ({ ...item, ...prism(yard, item.block) }));
-    const others = yard.campus.blocks
-      .map((block, index) => ({ block, index }))
-      .filter((item) => !item.block.home)
-      .map(({ block, index }) => prism(yard, block, NEIGHBORS[index % NEIGHBORS.length]).geometry);
-    const merged = others.length > 0 ? mergeGeometries(others) : null;
-    for (const other of others) other.dispose();
-    return { home: mine, away: merged };
-  }, [yard]);
+  const { home, away } = useMemo(() => take(yard, 'shells', () => shellsOf(yard)), [yard]);
   useEffect(
     () => () => {
       for (const item of home) item.geometry.dispose();
@@ -86,6 +93,7 @@ export function Blocks({ yard }: { yard: Yard }) {
       buildRoofUnits(
         home.map((item) => ({ ring: item.block.ring, height: item.roof })),
         (x, y) => yard.toScene(x, y),
+        yard.roof,
       ),
     [yard, home],
   );
@@ -363,18 +371,28 @@ function SailMesh({ yard, sail, chosen }: { yard: Yard; sail: Sail; chosen: bool
 
 function Plan({ yard }: { yard: Yard }) {
   useYard(yard);
-  const model = useTree();
-  const blob = useBlob();
   const ghost = yard.ghost;
+  const [grown, setGrown] = useState(false);
+  if (!grown && (yard.trees.length > 0 || (ghost !== null && yard.tool === 'tree'))) setGrown(true);
+  const model = useMemo(() => (grown ? buildTree() : null), [grown]);
+  useEffect(
+    () => () => {
+      model?.crown.dispose();
+      model?.trunk.dispose();
+    },
+    [model],
+  );
+  const blob = useBlob();
   return (
     <group>
-      {yard.trees.map((tree) => (
-        <PlantedTree key={tree.id} yard={yard} tree={tree} chosen={yard.selected === tree.id} model={model} blob={blob} />
-      ))}
+      {model &&
+        yard.trees.map((tree) => (
+          <PlantedTree key={tree.id} yard={yard} tree={tree} chosen={yard.selected === tree.id} model={model} blob={blob} />
+        ))}
       {yard.sails.map((sail) => (
         <SailMesh key={sail.id} yard={yard} sail={sail} chosen={yard.selected === sail.id} />
       ))}
-      {ghost && yard.tool === 'tree' && !yard.busy && (
+      {model && ghost && yard.tool === 'tree' && !yard.busy && (
         <mesh
           geometry={model.crown}
           position={[yard.toScene(ghost.x, ghost.y)[0], treeHeight(yard.years) - treeRadius(yard.years) * CANOPY_FLATTEN, yard.toScene(ghost.x, ghost.y)[2]]}
@@ -572,13 +590,7 @@ function ProbeMark({ yard }: { yard: Yard }) {
   );
 }
 
-export function probeHeight(yard: Yard): number {
-  return yard.radius * 0.07;
-}
-
-export function sunReach(yard: Yard): number {
-  return yard.radius * 0.72;
-}
+export { probeHeight, sunReach } from './controller';
 
 const pin = new THREE.Vector3();
 
@@ -720,23 +732,27 @@ export function Pulse({ yard }: { yard: Yard }) {
   return null;
 }
 
-type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel };
+type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel; onReady: () => void };
 
-export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS.high.texture, props = TIERS.high.props }: SceneProps) {
+export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS.high.texture, props = TIERS.high.props, onReady }: SceneProps) {
   const reach = sunReach(yard);
   return (
-    <>
+    <Stages onReady={onReady}>
       <Backdrop yard={yard} />
       <Pulse yard={yard} />
+      <Prime run={() => yard.readyCells()} />
+      <Prime run={(gl) => primeGround(yard, gl)} />
       <Ground yard={yard} texture={texture} />
+      <Prime run={() => primeBlocks(yard)} />
       <Blocks yard={yard} />
       <MappedTrees yard={yard} />
+      <Prime run={() => primeProps(yard, props)} />
       <Props yard={yard} level={props} />
       <Plan yard={yard} />
       <Sun yard={yard} reach={reach} shadow={shadow} />
       <ProbeMark yard={yard} />
       <Rig yard={yard} reach={reach} />
       <Pins layer={layer} />
-    </>
+    </Stages>
   );
 }
