@@ -124,6 +124,10 @@ After is the new production build on the same local preview with the same Lighth
 | Yard | 88 | 2.9 s | 314 ms | 162 ms | 4.8 s |
 | Plan | 96 | 2.4 s | 141 ms | 190 ms | 2.6 s |
 
+After the deploy the live site was measured once per page with the same settings. Home scored 93 with an LCP of 0.9 s, 330 ms of total blocking time, a longest task of 155 ms and 3.7 s to interactive. Yard scored 85 with an LCP of 2.2 s, 510 ms of total blocking time, a longest task of 206 ms and 4.0 s to interactive. Another build started on this machine during the yard run and the load reached 9 by its end.
+
+The first live table above was also taken on a busier machine than the local runs, which is why its blocking times are far higher than the local before table for the same build.
+
 Sources was not measured again. On this laptop without throttling the film went live 1.1 s after the page was requested on the local preview, down from 1.6 s for the old build, and going back to the landing page took 0.38 s, down from 0.66 s.
 
 The heat model now runs in a module Web Worker that calls the same engine functions, so its results are byte for byte the same as before. The worker builds the ground grid, the shadow backdrop and the bare day, and also the contact shadows, the rooftop units and the ground mesh data that the main thread used to build while it mounted the scene. The film goes live on the bare day while a second worker computes the sail day and the tree day, and the film switches to them when they arrive. The yard sends each plan change to the worker and drops any answer older than the latest edit. The 3D scene mounts one part per task and compiles its shaders in the background before its first frame. The yard page loads its 3D code after the readout bar has painted. The landing page now picks the film or the stills before the beat images load, so a visitor who gets the film no longer downloads stills it never shows. The two Latin web fonts and the campus file are preloaded. The yard still misses an LCP of 2.5 s because its readout bar waits for 285 KB of fonts, scripts and data in 20 requests on the simulated network.
