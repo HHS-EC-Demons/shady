@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState } from 'react';
-import { simulate, type HeatDay } from '@/engine/heat';
+import type { HeatDay } from '@/engine/heat';
+import { warmUp } from '@/engine/remote';
 import type { Story } from '@/engine/story';
 import { Yard } from '../yard/controller';
 import type { Bundle } from '../yard/store';
@@ -7,16 +8,12 @@ import { film, measure } from './state';
 
 const FilmScene = lazy(() => import('./FilmScene'));
 
-export type Days = { sail: HeatDay; full: HeatDay };
+export type Days = { sail: HeatDay | null; full: HeatDay | null };
 type Ready = { yard: Yard; days: Days };
 
 const loads = new Map<string, Promise<Ready>>();
 const done = new Map<string, Ready>();
 const progress: { share: number; listen: ((share: number) => void) | null } = { share: 0, listen: null };
-
-function pause(): Promise<void> {
-  return new Promise((resolve) => window.setTimeout(resolve, 16));
-}
 
 function report(share: number): void {
   progress.share = share;
@@ -28,22 +25,28 @@ function prepare(base: string, story: Story): Promise<Ready> {
   if (known) return known;
   const run = (async () => {
     report(0.12);
+    warmUp(2);
     const scene = import('./FilmScene');
     const answer = await fetch(`${base}campus/heritage.json`);
     if (!answer.ok) throw new Error('campus');
     const bundle = (await answer.json()) as Bundle;
     report(0.35);
-    await pause();
-    const yard = new Yard(bundle.campus, bundle.weather);
+    const yard = await Yard.open(bundle.campus, bundle.weather, 1);
     report(0.6);
-    await pause();
-    const sail = simulate(yard.ground, yard.weather, yard.backdrop, { blocks: [], trees: [], sails: [story.sail] });
+    const days: Days = { sail: null, full: null };
+    const sail = yard.simulate({ blocks: [], trees: [], sails: [story.sail] }, 0).then((day) => {
+      days.sail = day;
+      film.wake();
+    });
+    const full = yard.simulate({ blocks: [], trees: story.trees, sails: [story.sail] }, 1).then((day) => {
+      days.full = day;
+      film.wake();
+    });
+    void Promise.all([sail, full]).then(() => yard.close());
     report(0.74);
-    await pause();
-    const full = simulate(yard.ground, yard.weather, yard.backdrop, { blocks: [], trees: story.trees, sails: [story.sail] });
-    report(0.86);
     await scene;
-    const ready: Ready = { yard, days: { sail, full } };
+    report(0.86);
+    const ready: Ready = { yard, days };
     done.set(base, ready);
     return ready;
   })();
@@ -79,7 +82,10 @@ export default function Film({ base, story }: { base: string; story: Story }) {
     const host = document.querySelector<HTMLElement>('.film');
     if (!host) return;
     root.current = host;
-    if (unseen() || window.matchMedia('(prefers-reduced-motion: reduce)').matches || !canDraw()) return;
+    if (unseen() || window.matchMedia('(prefers-reduced-motion: reduce)').matches || !canDraw()) {
+      host.dataset.mode = 'still';
+      return;
+    }
     let live = true;
     host.dataset.mode = 'loading';
     const onScroll = () => {

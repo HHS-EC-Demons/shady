@@ -7,6 +7,7 @@ import { SURFACES, extentOf } from '@/engine/campus';
 import { dollars, planCost } from '@/engine/cost';
 import { TOUCH_LIMIT, rampColor } from '@/engine/heat';
 import { unproject } from '@/engine/osm';
+import { warmUp } from '@/engine/remote';
 import { placeDay, placesOf, shadeDistance, walkToShade, type PlaceDay } from '@/engine/places';
 import { clockLabel } from '@/engine/sun';
 import { SQUARE_FEET, Yard } from '../yard/controller';
@@ -331,12 +332,14 @@ export default function PlanSheet({ base }: { base: string }) {
 
   useEffect(() => {
     let live = true;
+    warmUp();
     loadBundle(base)
-      .then((file) => {
-        if (!live) return;
-        const next = new Yard(file.campus, file.weather);
+      .then((file) => Yard.open(file.campus, file.weather))
+      .then(async (next) => {
         restorePlan(next);
-        setYard(next);
+        await next.settled();
+        next.close();
+        if (live) setYard(next);
       })
       .catch(() => live && setFailed(true));
     return () => {

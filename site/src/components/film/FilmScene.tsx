@@ -1,6 +1,6 @@
 import { PerformanceMonitor } from '@react-three/drei';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { useEffect, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import * as THREE from 'three';
 import { insideRing, ringDistance, type Point } from '@/engine/geometry';
 import { placesOf } from '@/engine/places';
@@ -10,9 +10,10 @@ import { treeRadius } from '@/engine/growth';
 import type { Yard } from '../yard/controller';
 import { orientedBox } from '../yard/layout';
 import { BLOB_LIFT, buildSail, treeTint } from '../yard/models';
-import { Props } from '../yard/props';
+import { Props, primeProps } from '../yard/props';
 import { TIERS, chipName, keepFrame, powerChoice, quality, shortChip } from '../yard/quality';
-import { Backdrop, Blocks, Ground, MappedTrees, Pulse, Sun, blobSize, sunReach, useBlob, useTree } from '../yard/Scene';
+import { Backdrop, Blocks, Ground, MappedTrees, Pulse, Sun, blobSize, primeBlocks, primeGround, sunReach, useBlob, useTree } from '../yard/Scene';
+import { Prime, Stages } from '../yard/stages';
 import type { Days } from './Film';
 import { BEATS, film } from './state';
 
@@ -389,7 +390,8 @@ function Director({ yard, days, story, shared, onFrame }: { yard: Yard; days: Da
     shared.sail = ramp(at, 2.05, 2.6);
     shared.plant = ramp(at, 3.1, 3.62);
     shared.grow = SAPLING + (1 - SAPLING) * ramp(at, 3.6, 3.95);
-    if (at < 3) {
+    const before = yard.frame;
+    if (at < 3 || !days.sail) {
       yard.setBase(yard.bare);
       yard.setBlend(days.sail, ramp(at, 2.15, 2.85));
     } else {
@@ -398,7 +400,7 @@ function Director({ yard, days, story, shared, onFrame }: { yard: Yard; days: Da
     }
     yard.setMinute(minute);
 
-    if (film.current !== film.target) invalidate();
+    if (film.current !== film.target || yard.frame !== before) invalidate();
     if (first.current) {
       first.current = false;
       onFrame();
@@ -628,31 +630,38 @@ function Meter() {
 export default function FilmScene({ yard, days, story, onFrame, debug }: Props) {
   const tier = useSyncExternalStore(quality.subscribe, quality.snapshot, quality.server);
   const shared = useMemo<Shared>(() => ({ plant: 0, grow: SAPLING, draw: 0, move: 0, sail: 0, zoom: 1000 }), []);
+  const [ready, setReady] = useState(false);
   const reach = sunReach(yard);
   return (
     <Canvas
       shadows
       flat
-      frameloop="demand"
+      frameloop={ready ? 'demand' : 'never'}
       dpr={[1, TIERS[tier].dpr]}
       camera={{ fov: 30, near: 5, far: 9000, position: [-300, 420, 600] }}
       gl={{ antialias: true, stencil: true, preserveDrawingBuffer: keepFrame(), powerPreference: powerChoice() }}
       style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
       aria-hidden="true"
     >
-      <PerformanceMonitor onDecline={() => quality.lower()} />
-      <Backdrop yard={yard} />
-      <Pulse yard={yard} />
-      <Ground yard={yard} texture={TIERS[tier].texture} inert />
-      <Blocks yard={yard} />
-      <MappedTrees yard={yard} />
-      <Props yard={yard} level={TIERS[tier].props} />
-      <Trees yard={yard} story={story} state={shared} />
-      <SailModel yard={yard} sail={story.sail} state={shared} />
-      <Walk yard={yard} story={story} state={shared} />
-      <Sun yard={yard} reach={reach} shadow={TIERS[tier].shadow} locked />
-      <Director yard={yard} days={days} story={story} shared={shared} onFrame={onFrame} />
-      {debug && <Meter />}
+      <Stages onReady={() => setReady(true)}>
+        <PerformanceMonitor onDecline={() => quality.lower()} />
+        <Backdrop yard={yard} />
+        <Pulse yard={yard} />
+        <Prime run={() => yard.readyCells()} />
+        <Prime run={(gl) => primeGround(yard, gl)} />
+        <Ground yard={yard} texture={TIERS[tier].texture} inert />
+        <Prime run={() => primeBlocks(yard)} />
+        <Blocks yard={yard} />
+        <MappedTrees yard={yard} />
+        <Prime run={() => primeProps(yard, TIERS[tier].props)} />
+        <Props yard={yard} level={TIERS[tier].props} />
+        <Trees yard={yard} story={story} state={shared} />
+        <SailModel yard={yard} sail={story.sail} state={shared} />
+        <Walk yard={yard} story={story} state={shared} />
+        <Sun yard={yard} reach={reach} shadow={TIERS[tier].shadow} locked />
+        <Director yard={yard} days={days} story={story} shared={shared} onFrame={onFrame} />
+        {debug && <Meter />}
+      </Stages>
     </Canvas>
   );
 }
