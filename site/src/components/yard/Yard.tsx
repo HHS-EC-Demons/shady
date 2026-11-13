@@ -18,12 +18,15 @@ import { centerOf } from '@/engine/geometry';
 import { DAY_END, DAY_START, RAMP, TOUCH_LIMIT } from '@/engine/heat';
 import { loadCampus, type Found } from '@/engine/osm';
 import { warmUp } from '@/engine/remote';
+import { decodePlan } from '@/engine/share';
 import { clockLabel } from '@/engine/sun';
 import { hottestDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
-import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Tool } from './controller';
+import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Saved, type Tool } from './controller';
 import { quality } from './quality';
 import { SchoolPicker } from './SchoolPicker';
-import { keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
+import { OpenShared } from './ShareDialogs';
+import { adopt, clashes, dropHash, sharedBundle, sharedText, watchHash } from './shared';
+import { editHeight, editSurface, keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
 
 const YardCanvas = lazy(() => import('./YardCanvas'));
 
@@ -465,6 +468,7 @@ export default function YardStage({ base }: { base: string }) {
   const [status, setStatus] = useState('');
   const [note, setNote] = useState('');
   const [day, setDay] = useState<Day>('hottest');
+  const [asking, setAsking] = useState<((take: boolean) => void) | null>(null);
   const bundle = useRef<Bundle | null>(null);
   const finder = useRef<HTMLButtonElement>(null);
   const home = useRef('Heritage High School');
@@ -472,7 +476,7 @@ export default function YardStage({ base }: { base: string }) {
   const first = useRef(true);
   const turns = useRef(0);
 
-  const show = async (next: Bundle, live?: Weather, minute?: number, raising?: number): Promise<void> => {
+  const show = async (next: Bundle, live?: Weather, minute?: number, raising?: number, saved?: Saved): Promise<void> => {
     turns.current += 1;
     const turn = turns.current;
     bundle.current = next;
@@ -485,7 +489,8 @@ export default function YardStage({ base }: { base: string }) {
       built = same.yard;
     } else {
       built = await Yard.open(next.campus, weather);
-      restorePlan(built);
+      if (saved) built.load(saved);
+      else restorePlan(built);
       await built.settled();
       if (turn !== turns.current) {
         built.close();
@@ -506,12 +511,17 @@ export default function YardStage({ base }: { base: string }) {
   useEffect(() => {
     let live = true;
     warmUp();
-    const asked = new URLSearchParams(window.location.search).get('school');
+    const shared = sharedText();
+    const asked = shared === null ? new URLSearchParams(window.location.search).get('school') : null;
     const ready = kept && kept.weather === kept.bundle.weather ? Promise.resolve(kept.bundle) : loadBundle(base);
     ready
       .then((file) => {
         if (!live) return;
         void show(file);
+        if (shared !== null) {
+          void openShared(shared);
+          return;
+        }
         if (!asked) return;
         window.history.replaceState(null, '', window.location.pathname);
         try {
@@ -525,14 +535,16 @@ export default function YardStage({ base }: { base: string }) {
         }
       })
       .catch(() => live && setFailed(true));
+    const unwatch = watchHash();
     return () => {
       live = false;
+      unwatch();
     };
   }, [base]);
 
   useEffect(() => {
     if (!yard) return;
-    let seen = -1;
+    let seen = yard.heat;
     return yard.subscribe(() => {
       if (yard.busy || yard.planting > 0 || seen === yard.heat) return;
       seen = yard.heat;
@@ -558,7 +570,7 @@ export default function YardStage({ base }: { base: string }) {
         }
         setStatus('Loading its hottest day of the year');
         const weather = await hottestDay(campus.center.lat, campus.center.lon);
-        next = { campus, weather };
+        next = { campus, weather, school: found };
         keepSchool(next);
       }
       setStatus('Heating the ground');
@@ -574,11 +586,54 @@ export default function YardStage({ base }: { base: string }) {
     }
   };
 
+  const choose = () => new Promise<boolean>((resolve) => setAsking(() => resolve));
+
+  const openShared = async (text: string) => {
+    const plan = await decodePlan(text);
+    if (!plan) {
+      dropHash();
+      return;
+    }
+    setNote('');
+    if (plan.school) setPicking(true);
+    try {
+      const next = await sharedBundle(plan, base, setStatus);
+      if (!next) {
+        dropHash();
+        setStatus('');
+        setNote('That school has no mapped buildings yet');
+        return;
+      }
+      if (clashes(next, plan)) {
+        setStatus('');
+        setPicking(false);
+        const take = await choose();
+        if (!take) {
+          dropHash();
+          return;
+        }
+        if (plan.school) setPicking(true);
+      }
+      const saved = adopt(next, plan);
+      dropHash();
+      setStatus('Heating the ground');
+      await new Promise((resolve) => window.setTimeout(resolve, 40));
+      setDay('hottest');
+      first.current = true;
+      await show(next, undefined, undefined, undefined, saved);
+      setPicking(false);
+    } catch {
+      setPicking(true);
+      setNote('The map did not load. Try again.');
+    } finally {
+      setStatus('');
+    }
+  };
+
   const edit = (patch: number, surface: Surface) => {
     const current = bundle.current;
     if (!current || !yard) return;
-    const patches = current.campus.patches.map((item, index) => (index === patch ? { ...item, surface } : item));
-    const next = { campus: { ...current.campus, patches }, weather: current.weather };
+    const next = editSurface(current, patch, surface);
     keepSchool(next);
     void show(next, yard.weather.live ? yard.weather : undefined, yard.minute);
   };
@@ -586,8 +641,7 @@ export default function YardStage({ base }: { base: string }) {
   const raise = (block: number, height: number) => {
     const current = bundle.current;
     if (!current || !yard) return;
-    const blocks = current.campus.blocks.map((item, index) => (index === block ? { ...item, height, guessed: false } : item));
-    const next = { campus: { ...current.campus, blocks }, weather: current.weather };
+    const next = editHeight(current, block, height);
     keepSchool(next);
     void show(next, yard.weather.live ? yard.weather : undefined, yard.minute, block);
   };
@@ -615,6 +669,13 @@ export default function YardStage({ base }: { base: string }) {
     <>
       <Loaded key={`${yard.campus.name} ${yard.campus.center.lat} ${yard.weather.date}`} yard={yard} onFind={() => setPicking(true)} day={day} onDay={change} onEdit={edit} onRaise={raise} finder={finder} first={first} />
       <SchoolPicker open={picking} onOpenChange={(open) => status === '' && setPicking(open)} onPick={pick} home={home.current} status={status} note={note} returnTo={finder} />
+      <OpenShared
+        open={asking !== null}
+        onChoose={(take) => {
+          asking?.(take);
+          setAsking(null);
+        }}
+      />
     </>
   );
 }
