@@ -647,7 +647,7 @@ function Rig({ yard, reach }: { yard: Yard; reach: number }) {
     }
     if (!fitted.current) {
       const direction = new THREE.Vector3(-0.42, 0.62, 0.86).normalize();
-      view.position.copy(direction.multiplyScalar(distance));
+      view.position.set(0, reach * 0.14, 0).add(direction.multiplyScalar(distance));
       fitted.current = true;
     }
     if (import.meta.env.DEV) (window as unknown as { view: THREE.Camera }).view = view;
