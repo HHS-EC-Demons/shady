@@ -239,7 +239,17 @@
     width: 100%;
     height: 100%;
     object-fit: cover;
-    transition: opacity 700ms var(--ease);
+    opacity: 0;
+  }
+
+  .film-poster[data-under] {
+    opacity: 1;
+  }
+
+  .film-poster[data-shown] {
+    z-index: 3;
+    opacity: 1;
+    transition: opacity 300ms var(--ease);
   }
 
   .film[data-mode='live'] .film-poster {
@@ -247,11 +257,15 @@
     pointer-events: none;
   }
 
+  .film[data-mode='live'] .film-poster[data-shown] {
+    transition-duration: 700ms;
+  }
+
   .film-load {
     position: absolute;
     inset-inline: var(--gutter);
     bottom: 28px;
-    z-index: 3;
+    z-index: 4;
     height: 4px;
     overflow: hidden;
     border-radius: 2px;

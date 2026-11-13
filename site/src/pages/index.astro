@@ -27,6 +27,7 @@ const beats = [
   { id: 'plant', big: `${story.trees.length} trees`, small: `from ${dollars(story.cost.low)}, ${story.years} years` },
   { id: 'time', big: `${story.earlyTemp}°F`, small: `${story.place5}, ${clockLabel(story.early)}` },
 ];
+const stills = ['open', ...beats.map((beat) => beat.id), 'yours'].map((id) => `${base}beats/${id}.jpg`);
 ---
 
 <Base title="Shady" description="A 3D heat model of a real school. Scroll through one hot day, then plan the shade yourself." overlay>
@@ -45,7 +46,15 @@ const beats = [
       })();
     </script>
     <div class="film-stage" aria-hidden="true">
-      <img class="film-poster" src={`${base}beats/open.jpg`} alt="" width="1600" height="1000" />
+      {
+        stills.map((still, index) =>
+          index === 0 ? (
+            <img class="film-poster" src={still} alt="" width="1600" height="1000" data-shown />
+          ) : (
+            <img class="film-poster" data-src={still} alt="" width="1600" height="1000" />
+          ),
+        )
+      }
       <Film client:only="react" base={base} story={story} />
     </div>
     <div class="film-beats">
@@ -79,6 +88,73 @@ const beats = [
         </div>
       </section>
     </div>
+    <script is:inline>
+      (function () {
+        var film = document.querySelector('.film');
+        if (!film || film.dataset.mode !== 'loading') return;
+        var posters = film.querySelectorAll('.film-poster');
+        var beats = film.querySelectorAll('.beat');
+        var current = 0;
+        var wanted = 0;
+        var pending = -1;
+        var frame = 0;
+        var watch = new MutationObserver(function () {
+          if (film.dataset.mode !== 'loading') stop();
+        });
+        function stop() {
+          window.removeEventListener('scroll', schedule);
+          window.removeEventListener('resize', schedule);
+          watch.disconnect();
+          if (frame) cancelAnimationFrame(frame);
+          frame = 0;
+        }
+        function reveal(index) {
+          var poster = posters[index];
+          if (poster && !poster.getAttribute('src') && poster.dataset.src) poster.src = poster.dataset.src;
+        }
+        function show(index) {
+          if (index !== wanted || index === current || film.dataset.mode !== 'loading') return;
+          for (var i = 0; i < posters.length; i++) {
+            posters[i].removeAttribute('data-shown');
+            if (i === current) posters[i].setAttribute('data-under', '');
+            else posters[i].removeAttribute('data-under');
+          }
+          posters[index].setAttribute('data-shown', '');
+          current = index;
+        }
+        function update() {
+          frame = 0;
+          if (!film.isConnected || film.dataset.mode !== 'loading') return stop();
+          var middle = window.innerHeight / 2;
+          var index = -1;
+          for (var i = 0; i < beats.length && index < 0; i++) {
+            var box = beats[i].getBoundingClientRect();
+            if (box.top <= middle && box.bottom > middle) index = i;
+          }
+          if (index < 0 || !posters[index]) return;
+          wanted = index;
+          reveal(index);
+          if (window.scrollY > 0) reveal(index + 1);
+          if (index === current || index === pending) return;
+          pending = index;
+          posters[index].decode().then(
+            function () {
+              if (pending === index) pending = -1;
+              show(index);
+            },
+            function () {
+              if (pending === index) pending = -1;
+            },
+          );
+        }
+        function schedule() {
+          if (!frame) frame = requestAnimationFrame(update);
+        }
+        watch.observe(film, { attributes: true, attributeFilter: ['data-mode'] });
+        window.addEventListener('scroll', schedule, { passive: true });
+        window.addEventListener('resize', schedule, { passive: true });
+      })();
+    </script>
   </div>
 
   <section class="shell mx-auto flex max-w-[1180px] flex-col gap-14 pb-10 pt-20">
