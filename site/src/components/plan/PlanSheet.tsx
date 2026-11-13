@@ -257,7 +257,7 @@ function Sheet({ yard, bundle, base }: { yard: Yard; bundle: Bundle; base: strin
   const cost = planCost(trees.length, yard.sails);
   const figures = [
     { label: 'School', value: yard.campus.name, wide: true },
-    { label: 'Day', value: dayLabel(yard.weather.date), wide: false },
+    { label: 'Day', value: dayLabel(yard.weather.date), wide: true },
     { label: 'Air peak', value: `${Math.round(Math.max(...yard.weather.air))}°F`, wide: false },
     { label: 'Trees already there', value: String(standingTrees(yard)), wide: false },
   ];
