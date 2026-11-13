@@ -218,7 +218,7 @@ function Sheet({ yard, base }: { yard: Yard; base: string }) {
             Print
           </Button>
         ) : (
-          <a href={`${base}yard`} className="pill">
+          <a href={`${base}yard/`} className="pill">
             Plant in the yard
           </a>
         )}

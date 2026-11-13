@@ -60,7 +60,7 @@ const beats = [
         <div class="beat-words">
           <h2 class="beat-plain">Now yours</h2>
           <div class="flex flex-wrap gap-3">
-            <a class="pill" href={`${base}yard`}>Open the yard</a>
+            <a class="pill" href={`${base}yard/`}>Open the yard</a>
             <FindSchool client:idle base={base} />
           </div>
         </div>
@@ -73,7 +73,7 @@ const beats = [
       {
         more.map((item) => (
           <li class="border-t border-rule">
-            <a href={`${base}${item.href}`} class="group flex min-h-24 flex-col justify-center gap-1 py-5 no-underline">
+            <a href={`${base}${item.href}/`} class="group flex min-h-24 flex-col justify-center gap-1 py-5 no-underline">
               <span class="data text-[clamp(1.75rem,3vw,2.5rem)] font-semibold leading-none">{item.big}</span>
               <span class="text-lg font-medium text-soft underline-offset-4 group-hover:text-oak group-hover:underline">{item.small}</span>
             </a>

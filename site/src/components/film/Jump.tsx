@@ -9,7 +9,7 @@ export function FindSchool({ base }: { base: string }) {
   const [open, setOpen] = useState(false);
   const button = useRef<HTMLButtonElement>(null);
   const go = (found: Found | null) => {
-    const target = found ? `${base}yard?school=${encodeURIComponent(JSON.stringify(found))}` : `${base}yard`;
+    const target = found ? `${base}yard/?school=${encodeURIComponent(JSON.stringify(found))}` : `${base}yard/`;
     window.location.assign(target);
   };
   return (

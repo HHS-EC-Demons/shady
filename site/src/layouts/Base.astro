@@ -22,7 +22,7 @@ const links = [
 const fullTitle = title === 'Shady' ? 'Shady' : `${title} | Shady`;
 const home = Astro.site ?? Astro.url;
 const share = new URL(`${base}og.png?v=3`, home).href;
-const address = new URL(Astro.url.pathname.replace(/(index)?\.html$/, ''), home).href;
+const address = new URL(Astro.url.pathname, home).href;
 ---
 
 <!doctype html>
@@ -57,7 +57,7 @@ const address = new URL(Astro.url.pathname.replace(/(index)?\.html$/, ''), home)
           {
             links.map((link) => (
               <li>
-                <a href={`${base}${link.slug}`} aria-current={current === link.slug ? 'page' : undefined}>
+                <a href={`${base}${link.slug}/`} aria-current={current === link.slug ? 'page' : undefined}>
                   {link.label}
                 </a>
               </li>
