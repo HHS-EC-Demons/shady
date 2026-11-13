@@ -72,16 +72,27 @@ async function ask<T>(url: string): Promise<T> {
   throw new Error(`The weather archive did not answer (${reason})`);
 }
 
-export async function hottestDay(lat: number, lon: number, now = Date.now()): Promise<Weather> {
+function complete(weather: Weather): boolean {
+  return [weather.air, weather.sunshine, weather.wind].every((values) => values.length >= 24 && values.every((value) => typeof value === 'number' && Number.isFinite(value)));
+}
+
+export async function hottestDay(lat: number, lon: number, now = Date.now(), date?: string): Promise<Weather> {
+  const where = `latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}`;
+  if (date) {
+    const day = await dayOf(where, date).catch(() => null);
+    if (day && complete(day)) return day;
+  }
   const end = isoDay(now - 8 * 86400000);
   const start = isoDay(now - 372 * 86400000);
-  const where = `latitude=${lat.toFixed(3)}&longitude=${lon.toFixed(3)}`;
   const daily = await ask<DailyAnswer>(`${ARCHIVE}?${where}&start_date=${start}&end_date=${end}&daily=temperature_2m_max&temperature_unit=fahrenheit&timezone=auto`);
   let best = 0;
   daily.daily.temperature_2m_max.forEach((value, index) => {
     if (value !== null && value > (daily.daily.temperature_2m_max[best] ?? -Infinity)) best = index;
   });
-  const date = daily.daily.time[best];
+  return dayOf(where, daily.daily.time[best]);
+}
+
+async function dayOf(where: string, date: string): Promise<Weather> {
   const hours = await ask<HourlyAnswer>(
     `${ARCHIVE}?${where}&start_date=${date}&end_date=${date}&hourly=temperature_2m,shortwave_radiation,wind_speed_10m&temperature_unit=fahrenheit&wind_speed_unit=mph&timezone=auto`,
   );
