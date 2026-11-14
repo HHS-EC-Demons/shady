@@ -237,6 +237,43 @@ Lighthouse 13 run on this Mac the way `checks/perf.yml` runs it, one run each, l
 
 With one car file blocked on the dev build the cars stayed at their far level while broadleaf trees, poles and people went full once the page was idle, and no app error was logged.
 
+## Roofs and walls
+
+On 2026-11-14 the buildings got real roofs and walls. Campus roofs show the USDA aerial photo of that roof, with the shadows baked into the photo lifted, tree crowns over the roof removed and a plain rim about 1.5 m wide in the roof's own colour. Dark and strongly coloured roofs are pulled toward a light tone so no roof is darker than the hottest ground colours, and a coloured roof keeps about a third of its colour. The site's guessed rooftop units sink out of sight wherever a roof has a photo, because the photo shows the real ones. Neighbouring buildings keep their plain clay look. Walls get a brick texture tinted by each building's tone, and the windows are a dark cool pane with a thin light frame and a faint sky tint at grazing angles.
+
+### What it costs
+
+| Item | Bytes | When it loads |
+| --- | --- | --- |
+| Heritage roof photo, `heritage-roofs.webp` | 3,040 | with the scene, before the film goes live |
+| Brick texture, `masonry.webp` | 17,684 | with the scene, before the film goes live |
+| Roof and wall code in the scene bundle | 4.4 KB and 1.7 KB gzipped in the first round, a little more since and not measured again | with the scene |
+| Roof pass for a searched school, `roofpass` | 9.5 KB, 4.0 KB gzipped | only when a searched school asks for roofs |
+| Sharp photo read for a searched school | 0.77 MB at Roosevelt High School, 3.24 MB at Cass Technical High School, 2.86 MB at Wimberley High School | after the model and the photo trees are shown |
+| A searched school's dressed roofs, kept with the campus | 2 to 8 KB of WebP, or 58 to 71 KB of PNG in WebKit | stored in the browser |
+
+In four runs of the film on the production build the Heritage roofs were fully in 0.26 to 0.31 s before the film went live, on high and on medium, so the roofs never fade in during the film.
+
+GPU time per frame on the Intel chip with `?perf=gpu&gpu=low` on medium at 1920 by 1080, 240 frames at each beat, the live site and this build in turn. The heat beat is the busiest.
+
+| Beat | Live site, run 1 and run 2 | With roofs and walls, run 1 and run 2 | Load |
+| --- | --- | --- | --- |
+| Heat | 9.81 and 8.54 ms | 9.06 and 9.52 ms | 115 falling to 20 |
+| Plant | 9.09 and 8.05 ms | 7.80 and 8.56 ms | same runs |
+| Yours | 8.01 and 6.64 ms | 6.73 and 7.82 ms | same runs |
+
+The differences sit inside the spread between runs, so the roofs and walls cost nothing measurable. Calls and triangles at each beat are the same as on the live site. The shadow pass stayed between 0.35 and 0.48 ms.
+
+### When a searched school gets its roofs
+
+A school in the United States without roofs gets a separate roof pass after its model and its photo trees are shown. The pass reads the aerial photo at its own 0.6 m over the tiles that hold a campus building, and only reads the 1.2 m overview when the buildings span more than 36 ha. It runs only on a device with a mouse or trackpad and only when the browser does not report saving data or a `slow-2g`, `2g` or `3g` link. On a touch device or a slow link the roofs stay plain with their guessed rooftop units and nothing extra is downloaded. A failed or blocked read leaves the plain roofs and logs nothing, and the pass is tried again on the next page load, never in a loop. A school outside the United States never asks. Schools opened from the District page and schools saved before roofs existed get their roofs the same way the next time they are opened.
+
+From the search to the roofs on the production build, in two passes at loads of 25 to 138, the model showed after 7.1 to 8.6 s and the roofs were fully in after 11.1 to 13.4 s at Roosevelt High School, Cass Technical High School and Wimberley High School.
+
+### What each tier shows
+
+Every tier shows the roof photos, the brick and the glass. The brick fades out once a pixel covers more than about 8 cm of wall, so it is never drawn in the wide film shots. Close views on medium and low, which have no antialiasing, were checked still and in bursts of frames while the camera slid and turned slowly. The brick and the roof photo held steady with no shimmer or crawling lines, because both are mipmapped and the brick fades before its courses get thinner than a pixel. The thin outline drawn around campus buildings broke into dashes along roof edges on medium, on the live site as well, because it sat at the same depth as the roof. The buildings are now drawn slightly behind their outlines, and the sunk rooftop units sit 0.5 m under the roof so no corner pokes through.
+
 ## Scroll test
 
 `checks/scroll-perf.js` scrolls the whole film at a steady 700 px a second and records every frame time. Run it from the project root with `playwright-cli -s=perf run-code --filename=checks/scroll-perf.js` while the dev server is on port 4392 and nothing else is using the machine.
