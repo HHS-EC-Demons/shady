@@ -22,8 +22,8 @@ const SPREAD = 1.6;
 const LEAF_LOW = 0.1;
 const LEAF_HIGH = 0.22;
 const SHARPEN = 0.9;
-const FACET = 1.5;
-const FLATTEN = 0.8;
+const FACET = 2.4;
+const FLATTEN = 0.7;
 const NATIVE = 0.6;
 const REACH = 6;
 const LEAST = 30;
@@ -256,6 +256,39 @@ function edgeDistance(owner: Int32Array, cols: number, rows: number): Float32Arr
   return field;
 }
 
+function soft(value: number): number {
+  return value >= 0 ? RISE * Math.tanh(value / RISE) : -DROP * Math.tanh(-value / DROP);
+}
+
+function medianOf(values: Float32Array, cols: number, rows: number, radius: number): Float32Array {
+  const window = new Float32Array(2 * radius + 1);
+  const pass = (from: Float32Array, to: Float32Array, across: boolean) => {
+    const lines = across ? rows : cols;
+    const length = across ? cols : rows;
+    for (let line = 0; line < lines; line += 1) {
+      for (let at = 0; at < length; at += 1) {
+        let count = 0;
+        for (let k = Math.max(0, at - radius); k <= Math.min(length - 1, at + radius); k += 1) {
+          const value = across ? from[line * cols + k] : from[k * cols + line];
+          let slot = count;
+          while (slot > 0 && window[slot - 1] > value) {
+            window[slot] = window[slot - 1];
+            slot -= 1;
+          }
+          window[slot] = value;
+          count += 1;
+        }
+        to[across ? line * cols + at : at * cols + line] = window[count >> 1];
+      }
+    }
+  };
+  const middle = new Float32Array(values.length);
+  const out = new Float32Array(values.length);
+  pass(values, middle, true);
+  pass(middle, out, false);
+  return out;
+}
+
 function median(histogram: Uint32Array, count: number): number {
   let seen = 0;
   for (let value = 0; value < 256; value += 1) {
@@ -368,11 +401,9 @@ export function dressRoofs(photo: Photo, all: Block[], mute: Mute = ROOF_MUTE): 
     level[index] = own + (middleLuma[mine] - own) * Math.min(1, shade[index] * LIFT);
     weight[index] = 1;
   }
-  const broad = Float32Array.from(level);
-  const scratch = new Float32Array(size);
-  const radius = Math.max(1, Math.round(FACET / cell));
-  blur(broad, cols, rows, radius, scratch);
-  blur(weight, cols, rows, radius, scratch);
+  const filled = Float32Array.from(level);
+  for (let index = 0; index < size; index += 1) if (!weight[index] && reach[index] >= 0) filled[index] = middleLuma[reach[index]];
+  const broad = medianOf(filled, cols, rows, Math.max(1, Math.round(FACET / cell)));
   const ratio = new Float32Array(size * 3);
   const inner = new Float32Array(size);
   let left = cols;
@@ -398,8 +429,7 @@ export function dressRoofs(photo: Photo, all: Block[], mute: Mute = ROOF_MUTE): 
     const own = Math.max(1e-4, luma[index]);
     const ml = middleLuma[near];
     const lift = Math.min(1, shade[index] * LIFT);
-    const even = weight[index] > 1e-3 ? broad[index] / weight[index] : ml;
-    const target = level[index] * (ml / Math.max(1e-4, even)) ** FLATTEN;
+    const target = level[index] * (ml / Math.max(1e-4, broad[index])) ** FLATTEN;
     for (let band = 0; band < 3; band += 1) {
       const value = band === 0 ? photo.red[index] : band === 1 ? photo.green[index] : photo.blue[index];
       const m = middle[near * 3 + band];
@@ -437,8 +467,8 @@ export function dressRoofs(photo: Photo, all: Block[], mute: Mute = ROOF_MUTE): 
             }
           }
           const own = ratio[index * 3 + band];
-          const sharp = own + (own - sum / seen) * (mute.sharpen ?? SHARPEN);
-          change[band] = Math.min(RISE, Math.max(-DROP, sharp - 1)) * weight;
+          const sharp = own + (own - sum / seen) * (mute.sharpen ?? 0);
+          change[band] = soft(sharp - 1) * weight;
         }
         const even = lumaOf(change);
         for (let band = 0; band < 3; band += 1) color[band] *= 1 + even + (change[band] - even) * look.color;
@@ -484,7 +514,7 @@ export async function encodeRoofs(dressed: Dressed): Promise<string | null> {
 
 export function muteFor(gsd: number, mute: Mute = ROOF_MUTE): Mute {
   const fine = Math.min(1, Math.max(0, NATIVE / gsd));
-  return { contrast: mute.contrast * (0.4 + 0.6 * fine * fine), color: mute.color, sharpen: (mute.sharpen ?? SHARPEN) * fine * fine };
+  return { contrast: mute.contrast * (0.4 + 0.6 * fine * fine), color: mute.color, sharpen: SHARPEN * Math.min(1, 2 * (1 - fine)) };
 }
 
 export async function roofsFrom(photo: Photo, campus: Campus): Promise<RoofPhoto | null> {

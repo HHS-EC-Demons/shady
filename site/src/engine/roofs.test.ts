@@ -143,12 +143,25 @@ describe('the mute rule', () => {
     expect(look.color).toBeLessThan(0.4);
   });
 
-  it('calms coarse photos more than sharp ones', () => {
-    expect(muteFor(0.6)).toEqual({ ...ROOF_MUTE, sharpen: 0.9 });
+  it('never sharpens the sharp photo and calms coarse ones', () => {
+    expect(muteFor(0.6)).toEqual({ ...ROOF_MUTE, sharpen: 0 });
     const coarse = muteFor(1.2);
     expect(coarse.contrast).toBeLessThan(0.7);
     expect(coarse.contrast).toBeGreaterThan(0.4);
-    expect(coarse.sharpen).toBeLessThan(0.3);
+    expect(coarse.sharpen).toBeGreaterThan(0);
+  });
+
+  it('leaves no bright rim around a small dark mark', () => {
+    const plain: [number, number, number, number] = [200, 201, 198, 180];
+    const marked = photoOf(40, 40, (x, y) => {
+      if (x < 6 || x > 34 || y < 6 || y > 34) return [120, 130, 110, 90];
+      return Math.hypot(x - 20, y - 20) < 1.2 ? [70, 72, 74, 60] : plain;
+    });
+    const dressed = dressRoofs(marked, [block(square(6, 6, 28), true)]);
+    expect(dressed).not.toBeNull();
+    if (!dressed) return;
+    const field = lumaBytes(pixel(dressed, 12.5, 12.5));
+    for (const [x, y] of [[22.5, 20], [17.5, 20], [20, 22.5], [20, 17.5]]) expect(lumaBytes(pixel(dressed, x, y))).toBeLessThanOrEqual(field * 1.01);
   });
 
   it('reads the sharp photo except on a huge campus', () => {
