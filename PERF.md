@@ -6,7 +6,7 @@ Measured 2026-11-12 on a 2018 MacBook Pro in headless Chrome. The page asks for 
 
 | Budget | Result |
 | --- | --- |
-| 60 fps while scrolling at 1080p on integrated graphics | Intel UHD Graphics 630 at 1080p on the medium tier, 60 fps average and 60 fps at the 1% low in passes 2, 3 and 4, 55 fps average and 30 fps at the 1% low in pass 1 |
+| 60 fps while scrolling at 1080p on integrated graphics | Intel UHD Graphics 630 at 1080p on the medium tier, 60 fps average and 60 fps at the 1% low in passes 2, 3 and 4 on 2026-11-12. The standing trees and the detail round brought it down to about 40 fps on a quiet machine. After the fixes in Integrated graphics after the detail round its GPU time per frame is 10 to 15 percent lower, and under loads of 43 to 285 it scrolled at 51 to 55 fps where the code before the fixes gave 43 to 51 under loads of 43 to 56. A quiet machine pass is still to be taken |
 | 60 fps while scrolling on the fast chip | Radeon Pro 555X at 1080p and at 1440 by 900 at 2x on the high tier, 60 fps average and 60 fps at the 1% low in all four passes |
 | Under 100 draw calls | 54 at the busiest beat on high and 46 on medium with covers, sports gear, fences and street furniture, up from 48 and 41 |
 | Under 300k triangles | 269k at the busiest beat on high and 160k on medium with 478 standing trees, both counting the shadow pass, up from 262k and 155k |
@@ -91,6 +91,118 @@ Lighthouse 13.6 in its default mobile mode, one run per page, taken while anothe
 | Home | 66, 1.2 s, 4,255 ms, 110 | 69, 2.1 s, 3,524 ms, 131 |
 | Yard | 43, 6.0 s, 1,848 ms, 82 | 61, 3.3 s, 1,789 ms, 172 |
 | Plan | 63, 4.5 s, 977 ms, 94 | 84, 2.8 s, 469 ms, 144 |
+
+## Integrated graphics after the detail round
+
+On 2026-11-13 the film fell to about 40 fps on average and 15 to 20 fps at the 1% low on the Intel chip, measured on a quiet machine against the dev server. Four production builds from that day were served side by side with `astro preview` and measured in turn. Build A is the site before the day's work, build B adds the standing trees, build C adds the real life detail round, and build D is the current code with the District page and the polish rounds. Another session ran large builds for most of the evening and the one minute load swung between 4 and 430, so every number below names its load. Where the load was high the comparison rests on GPU time per frame, taken with the builds in turn so the load hits each one alike.
+
+### Which round cost the frames
+
+Scroll test on the Intel chip with `?perf&gpu=low`, three passes per build. GPU time is the mean per frame over the whole scroll from `checks/gpu-time.js` style timer queries, split into the shadow pass and the main pass. Calls and triangles are the readout at the busiest beat and count the shadow pass.
+
+| Build | 1080p average and 1% low, with the load | 1440 by 900 at 2x average and 1% low, with the load | GPU per frame at 1080p, shadow pass and main pass | GPU per frame at 1440 by 900 at 2x | Busiest beat |
+| --- | --- | --- | --- | --- | --- |
+| A, before the day | 55 and 30 fps at 4.5, 47 and 30 at 7, 52 and 30 at 66 | 52 and 30 at 5, 43 and 15 at 47, 37 and 9 at 96 after falling to low | 19.7 ms, 0.27 and 19.5 | 20.6 ms | 38 calls, 112k tris |
+| B, standing trees | 55 and 30 at 5.5, 43 and 30 at 47, 51 and 30 at 72 | 47 and 30 at 5, 40 and 20 at 66, 51 and 30 at 66 | 20.4 ms, 0.36 and 20.1 | 20.8 ms | 41 calls, 155k tris |
+| C, real life detail | 47 and 30 at 5, 40 and 20 at 66, 50 and 30 at 44 | 50 and 30 at 7, 39 and 20 at 56, 49 and 30 at 72 | 20.8 ms, 0.35 and 20.5 | 21.1 ms | 46 calls, 160k tris |
+| D, current code | 51 and 30 at 7, 43 and 30 at 56, 50 and 30 at 43 | 47 and 30 at 7, 46 and 15 at 47, 51 and 30 at 44 | 20.8 ms, 0.34 and 20.5 | 21.3 ms | 46 calls, 160k tris |
+
+The first pass of each build ran at 8 pm with the load between 4.5 and 7, and the other two ran just after 10 pm. GPU time is the mean of two passes taken with the builds in turn at about 9.20 pm, when the load was between 175 and 430, so it is higher than on a quiet machine but the same for every build. The 1% low sits at 30, 20 or 15 because frames land on whole multiples of 16.7 ms.
+
+GPU time per frame rose by about 0.9 ms from build A to build D, about 5 percent. The standing trees added 0.3 to 0.7 ms and the detail round 0.3 to 0.4 ms. The polish rounds and the District page added nothing to the film. Medians at fixed camera positions on each of the seven beats agree, with A at 15.0 ms, B at 15.4 ms, C at 15.8 ms and D at 15.5 ms at loads between 77 and 150.
+
+No single change cost the frames. Build A already spent about 14 ms of the 16.7 ms frame on the GPU, so the two small rises pushed the busiest beats past one frame and the frame rate fell in whole frame steps. The cost is fill. With antialiasing off the frames at four of the beats took 9.8 to 12.4 ms instead of 14 to 19 ms, and an empty frame took 0.8 ms instead of 3.1 ms, so most of the time goes to writing four samples for every pixel the scene covers.
+
+### Where the time goes
+
+Each part was switched off in the current build at all seven beats, with every frame drawn once with the part and once without it in turn, so the load falls on both alike. The table gives the time saved by switching the part off on the medium tier at 1080p. The load was between 40 and 100.
+
+| Part | Saved per frame |
+| --- | --- |
+| Ground with its shadows | 3.1 to 5.9 ms |
+| Backdrop under the ground | 1.5 to 3.0 ms in the close beats and 5 ms in the opening shot |
+| Buildings | up to 2.9 ms, of which the window, joint and gravel shading is 0.3 to 1.4 ms |
+| Close up ground noise grain and curb shading | 0.4 to 0.9 ms in the close beats and nothing in the wide ones |
+| Props together | 0.2 to 0.8 ms |
+| Ground lines, crossings, centre lines and pool lanes | up to 0.6 ms |
+| Standing trees with their shadows | up to 0.4 ms |
+| See through fences and nets | up to 0.4 ms |
+| Covers | up to 0.4 ms |
+| Shadow pass in all | 0.25 to 0.4 ms |
+| Sun path, hour dots, building edges and blobs | within the noise of 0.2 ms |
+
+Nothing in the film renders when nothing moves, no part rebuilds per frame, and the shadow pass stays under half a millisecond. The hour label fade lives only in the yard and writes styles straight to the labels without React state. Turning the shadow sample pattern with one sine and cosine instead of five, and drawing the bottom ground layer with depth instead of stencil, were tried and gave nothing measurable, so they were dropped.
+
+### What changed
+
+- The backdrop under the ground had been a disc drawn under the whole campus and only hidden by the stencil, so it was still rasterized behind every ground pixel. It now has a hole the size of the ground grid, less 4 m so the edges overlap, and it no longer writes depth. It looks the same on every tier.
+- Building walls now skip the window, sill, base and joint shading where that shading fades to nothing, on roofs and on walls too far away to show windows, and skip the gravel noise on everything but flat roofs. The output is the same.
+- On the medium and low tiers the ground no longer draws its fine noise grain and no longer shades the curb bevels in close views. Paving joints, mowing stripes, lines and shadows stay.
+
+Before and after on the Intel chip at 1080p and 1440 by 900 at 2x, builds in turn.
+
+| Measure | D, current code | After | Load |
+| --- | --- | --- | --- |
+| 1080p, average, 1% low and slow frames, pass 1 | 43 fps, 30 fps, 163 | 52 fps, 30 fps, 71 | 47 to 56 |
+| 1440 by 900 at 2x, pass 1 | 46 fps, 15 fps, 95 | 51 fps, 30 fps, 65 | 47 to 56 |
+| 1080p, pass 2 | 50 fps, 30 fps, 101 | 53 fps, 20 fps, 57 | 43 to 54 |
+| 1440 by 900 at 2x, pass 2 | 51 fps, 30 fps, 75 | 55 fps, 30 fps, 44 | 43 to 54 |
+| GPU per frame over the scroll at 1080p, two passes | 20.8 ms | 18.6 ms | 175 to 430 |
+| GPU per frame over the scroll at 1440 by 900 at 2x, two passes | 21.3 ms | 18.0 ms | 175 to 430 |
+| GPU per frame over the scroll at 1080p, two more passes | 20.0 and 21.0 ms | 17.9 and 18.7 ms | 33 to 152 |
+| GPU per frame at the seven beats, mean of three pairs | 20.0 ms | 18.1 ms | 52 to 85 |
+| Busiest beat on medium | 46 calls, 160k tris | 46 calls, 160k tris | any |
+| Busiest beat on high | 54 calls, 269k tris | 54 calls, 269k tris | any |
+
+The fixed beat pairs were taken before the medium grain change, which saves another 0.4 to 0.9 ms in the close beats. Slow frames are frames over 20 ms. Every after run had fewer slow frames than the run of D next to it.
+
+### What the medium tier leaves out
+
+Since 2026-11-13 the medium tier no longer draws the fine noise grain on grass, asphalt, concrete, courts and soil, or the curb bevel shading along paths, courts and patches in close views. It already left out the soft blob under each standing tree, every standing tree past the first 250, the shadows of cars, people, poles, nets, goalposts, sports gear, fences and street furniture, and it draws 140 cars instead of 300 and 70 people instead of 150. Its shadow map is 2048 instead of 3072 and its pixel ratio stops at 1.25. The low tier also leaves out every prop and keeps 150 standing trees.
+
+### Yard and District
+
+`checks/yard-perf.js` opens the yard at Heritage and at Roosevelt High School in Seattle, drags the view around for four seconds, then drags the time slider across the day and back, and reports frames, draw calls and triangles for each. A school link clears the page address once the yard reads it, so the check puts `gpu=low` back on the address, or the searched school would open on the fast chip. `checks/district-perf.js` loads the 48 Frisco schools once, keeps the browser storage and scrubs the District time slider on each screen. Both count draws with a wrapper around every WebGL draw call because those pages have no readout.
+
+GPU time per frame on the medium tier at the opening view and at one turned view, Intel chip at 1920 by 1080, builds in turn, two pairs each.
+
+| Yard | D, current code | After | Calls and triangles | Load |
+| --- | --- | --- | --- | --- |
+| Heritage | 16.3 ms | 14.1 ms | 39 calls, 110k tris | 34 to 40 |
+| Roosevelt High School | 14.1 ms | 13.2 ms | 45 calls, 61k tris | 10 to 37 |
+
+The frame rate runs of the yard check came at loads between 96 and 322. Both builds fell to the low tier while orbiting and gave 23 to 37 fps orbiting and 55 to 57 fps scrubbing the time slider, so those runs show the busy machine and not the site, and the yard still needs a quiet pass.
+
+District with 48 Frisco tiles on the new build, two passes, load 6 to 13. The District page does not use the scene code that changed.
+
+| Screen | Chip | Frames | Average | 1% low | Worst frame | Frames over 20 ms | Draw calls | Triangles |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1920 by 1080 with `gpu=low` | Intel | 494 and 533 | 60 fps | 60 fps | 17 ms | 0 | 7 | 76k |
+| 1440 by 900 at 2x with `gpu=low` | Intel | 491 and 494 | 60 fps | 60 fps | 17 and 33 ms | 0 and 2 | 7 | 76k |
+
+### Final scroll test
+
+`checks/scroll-perf.js` on the new production build, two passes in fresh browsers. Pass 1 started at a load of 285 and ended at 100, and pass 2 started at 90 and ended at 52, so the Intel rows and the slowed processor row show the busy machine. The CPU slowed 4 times row fell to the low tier in pass 1.
+
+| Run | Chip | Pass 1 frames, average, 1% low, slow frames | Pass 2 frames, average, 1% low, slow frames | Readout |
+| --- | --- | --- | --- | --- |
+| Laptop 1920 by 1080 with `gpu=low` | Intel UHD Graphics 630 | 497, 51 fps, 20 fps, 70 | 522, 54 fps, 30 fps, 59 | 46 calls, 160k tris, dpr 1.00, medium |
+| Laptop 1440 by 900 at 2x with `gpu=low` | Intel UHD Graphics 630 | 431, 53 fps, 30 fps, 58 | 438, 54 fps, 20 fps, 46 | 46 calls, 160k tris, dpr 1.25, medium |
+| Laptop 1920 by 1080 | Radeon Pro 555X | 581, 60 fps, 60 fps, 0 | 581, 60 fps, 60 fps, 0 | 54 calls, 269k tris, dpr 1.00, high |
+| Laptop 1440 by 900 at 2x | Radeon Pro 555X | 488, 60 fps, 60 fps, 0 | 488, 60 fps, 60 fps, 0 | 54 calls, 269k tris, dpr 1.50, high |
+| Phone 390 by 844 at 3x | Radeon Pro 555X | 460, 60 fps, 60 fps, 0 | 458, 60 fps, 60 fps, 2 | 54 calls, 269k tris, dpr 1.50, high |
+| Laptop 1080p with the CPU slowed 4 times | Radeon Pro 555X | 238, 24 fps, 6 fps, 164 | 113, 12 fps, 5 fps, 106 | 46 calls, 160k tris, dpr 1.00 |
+
+`checks/gpu-time.js` on the new build at a load of 50 to 54. The backdrop now has a hole under the ground, so hiding the ground also hides the backdrop that sat under it, and the last column counts both.
+
+| Screen | Chip and tier | p50 and p99 | Shadow and main | Ground and the backdrop under it |
+| --- | --- | --- | --- | --- |
+| 1920 by 1080 | Intel UHD Graphics 630, medium | 18.8 and 22.5 | 0.33 and 18.2 | 10.8 |
+| 1440 by 900 at 2x | Intel UHD Graphics 630, medium | 15.8 and 19.3 | 0.30 and 15.4 | 8.7 |
+| 1920 by 1080 | Radeon Pro 555X, high | 5.2 and 6.8 | 1.08 and 4.26 | 2.0 |
+| 1440 by 900 at 2x | Radeon Pro 555X, high | 6.5 and 9.7 | 1.05 and 5.58 | 2.5 |
+
+No run of the day had a quiet machine for long enough, so the tables above that were marked as taken under load still wait for a quiet pass, and so do the Intel rows here. The numbers that hold whatever the load are the GPU comparisons taken with the builds in turn, which put the new build 10 to 15 percent under the code before the fixes and 6 to 13 percent under the site before that day.
 
 ## Reading the aerial photo
 
@@ -210,11 +322,12 @@ The heat model now runs in a module Web Worker that calls the same engine functi
 ## What keeps it fast
 
 - The canvas renders on demand. A frame is drawn only when scroll, the pointer, an animation or the model changes something. An idle page draws nothing.
-- Tiers set the pixel ratio cap at 1.5, 1.25 or 1, the shadow map at 3072, 2048 or 1024, and props at 300 cars and 150 people, 140 cars and 70 people, or none. A chip named Intel starts on medium. A frame rate drop steps down one tier, waits 5 seconds before it can step again, and does nothing if the visitor picked a tier in the footer. A tier change only resizes the canvas and the shadow map and rebuilds the props.
+- Tiers set the pixel ratio cap at 1.5, 1.25 or 1, the shadow map at 3072, 2048 or 1024, and props at 300 cars and 150 people, 140 cars and 70 people, or none. Only the high tier draws the fine noise grain and curb shading on the ground. A chip named Intel starts on medium. A frame rate drop steps down one tier, waits 5 seconds before it can step again, and does nothing if the visitor picked a tier in the footer. A tier change only resizes the canvas and the shadow map and rebuilds the props.
 - One shadow casting light. Its shadow area follows the view, so close ups get sharp shadows from the same map. Cars, people, poles, nets and goalposts cast shadows only on high. On medium cars keep their contact blobs.
 - Props hide when the nearest car would be under 3 pixels long. On the current campus the nearest car is still about 7 pixels in the widest film shots at 1080p, so they stay.
-- The ground is one draw call of about 19 thousand vector triangles, so edges stay sharp at any zoom with no large textures. In the film a stencil test lets each pixel take only its top ground layer, the ground samples the shadow map itself instead of a second full screen shadow plane, and the backdrop only fills pixels the ground left empty.
+- The ground is one draw call of about 19 thousand vector triangles, so edges stay sharp at any zoom with no large textures. In the film and the yard a stencil test lets each pixel take only its top ground layer, the ground samples the shadow map itself instead of a second full screen shadow plane, and the backdrop only fills pixels the ground left empty. The backdrop has a hole the size of the ground grid, so it is not even rasterized behind the ground, and it writes no depth.
 - Close up ground detail sits behind real branches on the pixel footprint. Noise, joints, mowing bands and curb relief run only when a pixel is smaller than the feature, sheen fades out past 0.6 m a pixel, and curb relief strips collapse in the vertex shader once relief can no longer show.
+- Building walls skip the window, sill, base and joint shading wherever it fades to nothing, on roofs and on walls too far away to show windows, and skip the gravel noise on everything but flat roofs.
 - The heat texture uploads before the frame starts, so it never breaks the render pass.
 - The film and yard canvases keep their drawing buffer on devices with a mouse or trackpad, so Chrome does not clear it in a pass of its own. Touch devices keep the browser default because no phone has been measured.
 - The shade sail is drawn at near zero size from the first frame, so its shaders compile at load instead of mid scroll.
@@ -229,7 +342,7 @@ The heat model now runs in a module Web Worker that calls the same engine functi
 - A real mid range phone. The phone row above is this laptop at phone size.
 - A cold network. All load numbers are from a local server.
 - Safari and Firefox.
-- The Yard page under the same scroll test. It uses the same stencil and kept buffer path as the film, checked by eye on close ups and not timed.
+- The yard and District pages on a quiet machine. `checks/yard-perf.js` and `checks/district-perf.js` time them the same way as the film, and the runs above were taken under load.
 
 ## District
 
