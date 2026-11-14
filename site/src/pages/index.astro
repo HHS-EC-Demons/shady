@@ -5,6 +5,7 @@ import { Detail, FindSchool } from '../components/film/Jump.tsx';
 import type { Campus } from '../engine/campus';
 import { dollars } from '../engine/cost';
 import { tellStory } from '../engine/story';
+import { countSources } from '../lib/sources';
 import { clockLabel } from '../engine/sun';
 import type { Weather } from '../engine/weather';
 import data from '../../public/campus/heritage.json';
@@ -18,7 +19,7 @@ const more = [
   { big: `${story.air}°F`, small: `${story.school}`, href: 'yard' },
   { big: `${story.trees.length} trees`, small: 'A plan to print', href: 'plan' },
   { big: '48 schools', small: 'A district ranked', href: 'district' },
-  { big: '16 sources', small: 'Every number traced', href: 'sources' },
+  { big: `${countSources()} sources`, small: 'Every number traced', href: 'sources' },
 ];
 
 const beats = [
