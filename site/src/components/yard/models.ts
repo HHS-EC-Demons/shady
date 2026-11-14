@@ -637,13 +637,35 @@ function box(builder: Builder, center: THREE.Vector3, along: THREE.Vector3, acro
   face([p[3], p[0], q[0], q[3]]);
 }
 
+const SINK_HEAD = `#include <common>
+attribute float aSink;
+uniform float uSink;`;
+
+const SINK_BODY = `#include <begin_vertex>
+if ( aSink > -0.5 ) transformed.y = mix( transformed.y, aSink - 0.05, uSink );`;
+
+export function sinkingUnits(sink: { value: number }): { material: THREE.MeshStandardMaterial; depth: THREE.MeshDepthMaterial } {
+  const patch: THREE.Material['onBeforeCompile'] = (shader) => {
+    shader.uniforms.uSink = sink;
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', SINK_HEAD).replace('#include <begin_vertex>', SINK_BODY);
+  };
+  const material = new THREE.MeshStandardMaterial({ color: '#dfe5e4', roughness: 0.9 });
+  material.onBeforeCompile = patch;
+  material.customProgramCacheKey = () => 'shady-units-1';
+  const depth = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  depth.onBeforeCompile = patch;
+  depth.customProgramCacheKey = () => 'shady-units-depth-1';
+  return { material, depth };
+}
+
 export function buildRoofUnits(
-  blocks: { ring: [number, number][]; height: number }[],
+  blocks: { ring: [number, number][]; height: number; sunk?: boolean }[],
   toScene: (x: number, y: number) => [number, number, number],
   units: RoofUnit[] = roofUnits(blocks.map((block) => block.ring)),
 ): THREE.BufferGeometry | null {
   if (units.length === 0) return null;
   const builder = new Builder();
+  const sinks: number[] = [];
   for (const unit of units) {
     const { x, y, ux, uy } = unit;
     const [sx, , sz] = toScene(x, y);
@@ -659,8 +681,12 @@ export function buildRoofUnits(
       const spot = center.clone().addScaledVector(along, shift);
       cylinder(builder, new THREE.Vector3(spot.x, base + unit.tall - 0.02, spot.z), new THREE.Vector3(spot.x, base + unit.tall + 0.22, spot.z), fan, 12, true);
     }
+    const sink = blocks[unit.block].sunk ? base : -1;
+    while (sinks.length < builder.positions.length / 3) sinks.push(sink);
   }
-  return builder.geometry();
+  const geometry = builder.geometry();
+  geometry.setAttribute('aSink', new THREE.Float32BufferAttribute(sinks, 1));
+  return geometry;
 }
 
 export type Flat = [number, number][];
@@ -683,6 +709,8 @@ const KEEP = 0.55;
 const UP: Spot = [0, 1, 0];
 const DOWN: Spot = [0, -1, 0];
 const ROOF_WARM: Spot = [0.88 / 0.91, 0.82 / 0.935, 0.74 / 0.965];
+const MASONRY_TILE = 1.7;
+const MASONRY_CONTRAST = 0.9;
 
 function ringArea(ring: Flat): number {
   let twice = 0;
@@ -1241,6 +1269,11 @@ vWallRaised = step( 0.05, transformed.y );
 vWallLift = transformed.y * vWallRaised;`;
 
 const WALL_FRAGMENT_HEAD = `#include <common>
+uniform sampler2D uRoofMap;
+uniform vec4 uRoofBox;
+uniform float uRoofMix;
+uniform sampler2D uBrickMap;
+uniform float uBrickMix;
 varying float vWallStorey;
 varying vec3 vWallPos;
 varying vec3 vWallNormal;
@@ -1276,8 +1309,19 @@ float wallPlain = step( vWallStorey, -0.5 );
 float wallFade = wallSide * ( 1.0 - smoothstep( 0.16, 0.45, wallPx ) ) * ( 1.0 - wallPlain );
 float wallFine = 1.0 - smoothstep( 0.025, 0.07, wallPx );
 float wallGravel = wallDeck * ( 1.0 - smoothstep( 0.05, 0.16, max( length( fwidth( vWallPos.xz ) ), 1e-4 ) ) );
+vec2 wallBrickUv = vec2( wallAlong, wallHigh ) * ${(1 / MASONRY_TILE).toFixed(4)};
+vec2 wallBrickX = dFdx( wallBrickUv );
+vec2 wallBrickY = dFdy( wallBrickUv );
 float wallGlass = 0.0;
 float wallFrame = 0.0;
+float wallPhoto = 0.0;
+if ( uRoofMix > 0.0 ) {
+  vec2 wallRoofUv = vec2( ( vWallPos.x - uRoofBox.x ) * uRoofBox.z, ( -vWallPos.z - uRoofBox.y ) * uRoofBox.w );
+  vec4 wallRoofTexel = texture2D( uRoofMap, wallRoofUv );
+  vec2 wallRoofIn = step( vec2( 0.0 ), wallRoofUv ) * step( wallRoofUv, vec2( 1.0 ) );
+  wallPhoto = smoothstep( 0.25, 0.45, wallN.y ) * ( 1.0 - wallPlain ) * wallRoofTexel.a * wallRoofIn.x * wallRoofIn.y * uRoofMix;
+  diffuseColor.rgb = mix( diffuseColor.rgb, wallRoofTexel.rgb, wallPhoto );
+}
 if ( wallFade > 0.0 ) {
   float wallStorey = vWallStorey > 2.4 ? vWallStorey : 4.2;
   float wallScale = 4.2 / wallStorey;
@@ -1290,15 +1334,25 @@ if ( wallFade > 0.0 ) {
   float wallPane = 1.0 - smoothstep( 1.3 - wallStepU, 1.3 + wallStepU, wallOff );
   float wallMullion = 1.0 - smoothstep( 0.035 - wallStepU, 0.035 + wallStepU, wallOff );
   float wallTransom = 1.0 - smoothstep( 0.03 - wallStepY, 0.03 + wallStepY, abs( wallIn - 2.15 ) );
+  float wallInset = ( 1.0 - smoothstep( 1.25 - wallStepU, 1.25 + wallStepU, wallOff ) ) * smoothstep( 1.05 - wallStepY, 1.05 + wallStepY, wallIn ) * ( 1.0 - smoothstep( 2.65 - wallStepY, 2.65 + wallStepY, wallIn ) );
   wallGlass = wallBand * wallPane * wallRoom * wallFade;
-  wallFrame = max( wallMullion, wallTransom ) * wallGlass * wallFine;
+  wallFrame = max( max( wallMullion, wallTransom ), 1.0 - wallInset ) * wallGlass * wallFine;
   float wallSill = ( 1.0 - smoothstep( 0.06 - wallStepY, 0.06 + wallStepY, abs( wallIn - 0.94 ) ) ) * wallPane * wallRoom * wallFade * wallFine;
   float wallBase = ( 1.0 - smoothstep( 0.5 - wallStepY, 0.5 + wallStepY, wallHigh ) ) * wallFade;
   float wallJointW = max( 0.035, wallPx * 0.6 );
   float wallJointV = 1.0 - smoothstep( wallJointW - wallStepU, wallJointW + wallStepU, wallBay * 0.5 - wallOff );
   float wallJointH = ( 1.0 - smoothstep( wallJointW - wallStepY, wallJointW + wallStepY, min( wallIn, 4.2 - wallIn ) ) ) * step( 0.6, wallHigh );
   float wallJoint = max( wallJointV, wallJointH ) * wallFade * ( 1.0 - wallGlass ) * clamp( 0.05 / wallPx, 0.0, 1.0 );
-  diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.7, 0.77, 0.83 ), wallGlass * ( 1.0 - wallFrame ) );
+  float wallBrickNear = ( 1.0 - smoothstep( 0.035, 0.08, wallPx ) ) * uBrickMix * ( 1.0 - wallGlass );
+  if ( wallBrickNear > 0.0 ) {
+    float wallBrick = textureGrad( uBrickMap, wallBrickUv, wallBrickX, wallBrickY ).r - 0.5;
+    diffuseColor.rgb *= 1.0 + wallBrick * ${MASONRY_CONTRAST.toFixed(3)} * wallBrickNear;
+  }
+  vec3 wallView = normalize( cameraPosition - vWallPos );
+  float wallGrazing = 1.0 - clamp( dot( wallN, wallView ), 0.0, 1.0 );
+  vec3 wallPaneColor = mix( vec3( 0.13, 0.165, 0.21 ), vec3( 0.4, 0.48, 0.57 ), 0.22 + 0.5 * wallGrazing * wallGrazing );
+  diffuseColor.rgb = mix( diffuseColor.rgb, wallPaneColor, wallGlass * ( 1.0 - wallFrame ) );
+  diffuseColor.rgb = mix( diffuseColor.rgb, vec3( 0.8, 0.82, 0.82 ), wallFrame );
   diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * 0.9, wallSill );
   diffuseColor.rgb = mix( diffuseColor.rgb, diffuseColor.rgb * vec3( 0.84, 0.86, 0.86 ), wallBase );
   diffuseColor.rgb *= 1.0 - 0.045 * wallJoint;
@@ -1308,24 +1362,40 @@ if ( wallGravel > 0.0 ) {
   float wallSpeck = wallNoise( wallGrit ) * 0.65 + wallNoise( wallGrit * 0.37 + 17.0 ) * 0.35;
   diffuseColor.rgb *= 1.0 + ( wallSpeck - 0.5 ) * 0.07 * wallGravel;
 }
-diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.91, 0.935, 0.965 ), wallRoof );
+diffuseColor.rgb *= mix( vec3( 1.0 ), vec3( 0.91, 0.935, 0.965 ), wallRoof * ( 1.0 - wallPhoto ) );
 float wallGrounded = step( 0.001, vWallRaised ) * step( vWallRaised, 0.9999 );
 float wallFoot = wallSide * ( 1.0 - smoothstep( 0.0, 2.0, wallHigh ) );
 float wallEave = wallSide * wallGrounded * smoothstep( wallTop - 0.7, wallTop, wallHigh );
 diffuseColor.rgb *= ( 1.0 - 0.10 * wallFoot ) * ( 1.0 - 0.09 * wallEave );`;
 
-const WALL_ROUGHNESS = `#include <roughnessmap_fragment>
-roughnessFactor = mix( roughnessFactor, 0.55, wallGlass * ( 1.0 - wallFrame ) );`;
+export type WallSurface = {
+  uRoofMap: { value: THREE.Texture };
+  uRoofBox: { value: THREE.Vector4 };
+  uRoofMix: { value: number };
+  uBrickMap: { value: THREE.Texture };
+  uBrickMix: { value: number };
+};
 
-export function enhanceWalls(material: THREE.MeshStandardMaterial): void {
-  material.onBeforeCompile = (shader) => {
-    shader.vertexShader = shader.vertexShader.replace('#include <common>', WALL_VERTEX_HEAD).replace('#include <worldpos_vertex>', WALL_VERTEX_BODY);
-    shader.fragmentShader = shader.fragmentShader
-      .replace('#include <common>', WALL_FRAGMENT_HEAD)
-      .replace('#include <color_fragment>', WALL_FRAGMENT_BODY)
-      .replace('#include <roughnessmap_fragment>', WALL_ROUGHNESS);
+const BLANK = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+BLANK.needsUpdate = true;
+
+export function wallSurface(shared?: WallSurface): WallSurface {
+  return {
+    uRoofMap: shared?.uRoofMap ?? { value: BLANK },
+    uRoofBox: shared?.uRoofBox ?? { value: new THREE.Vector4(0, 0, 1, 1) },
+    uRoofMix: { value: 0 },
+    uBrickMap: shared?.uBrickMap ?? { value: BLANK },
+    uBrickMix: shared?.uBrickMix ?? { value: 0 },
   };
-  material.customProgramCacheKey = () => 'shady-walls-5';
+}
+
+export function enhanceWalls(material: THREE.MeshStandardMaterial, surface: WallSurface = wallSurface()): void {
+  material.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, surface);
+    shader.vertexShader = shader.vertexShader.replace('#include <common>', WALL_VERTEX_HEAD).replace('#include <worldpos_vertex>', WALL_VERTEX_BODY);
+    shader.fragmentShader = shader.fragmentShader.replace('#include <common>', WALL_FRAGMENT_HEAD).replace('#include <color_fragment>', WALL_FRAGMENT_BODY);
+  };
+  material.customProgramCacheKey = () => 'shady-walls-6';
   material.needsUpdate = true;
 }
 

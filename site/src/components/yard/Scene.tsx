@@ -11,11 +11,12 @@ import { centerOf, type Point } from '@/engine/geometry';
 import { CANOPY_FLATTEN, type Sail } from '@/engine/shade';
 import { probeHeight, sunReach, treeHeight, treeRadius, type PlanTree, type Yard } from './controller';
 import { Ground, primeGround } from './ground';
-import { BLOB_LIFT, buildBlob, buildBlock, buildCone, buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint, type BlockLook, type BlockModel } from './models';
+import { BLOB_LIFT, buildBlob, buildBlock, buildCone, buildRoofUnits, buildSail, buildTree, enhanceWalls, sinkingUnits, treeTint, wallSurface, type BlockLook, type BlockModel } from './models';
 import { buildStructures } from './covers';
 import { Props, primeProps } from './props';
 import { TIERS, type PropLevel } from './quality';
 import { Prime, Stages, keep, take } from './stages';
+import { heldMasonry, heldRoofs, loadMasonry, loadRoofs, roofBlocks, type RoofLayer } from './surfaces';
 
 const INK = '#12261c';
 const LEAF = '#2f6243';
@@ -47,6 +48,7 @@ function groundPoint(event: ThreeEvent<PointerEvent>): THREE.Vector3 | null {
 export { Ground, primeGround } from './ground';
 
 const HOME_WALL = new THREE.Color(WALL);
+const SURFACE_FADE = 0.8;
 
 function standAway(campus: Campus, block: Block): [number, number] | undefined {
   const [cx, cy] = centerOf(block.ring);
@@ -110,6 +112,8 @@ function shellsOf(yard: Yard) {
 }
 
 export function primeBlocks(yard: Yard): void {
+  void loadMasonry();
+  void loadRoofs(yard.campus, yard.middle);
   keep(yard, 'shells', () => shellsOf(yard));
 }
 
@@ -123,29 +127,89 @@ export function Blocks({ yard }: { yard: Yard }) {
     },
     [home, away, built],
   );
+  const gl = useThree((state) => state.gl);
+  const invalidate = useThree((state) => state.invalidate);
   const walls = useMemo(() => {
     const mine = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 0.92, metalness: 0 });
     const others = new THREE.MeshStandardMaterial({ color: '#ffffff', vertexColors: true, roughness: 1, metalness: 0 });
-    enhanceWalls(mine);
-    enhanceWalls(others);
-    return { mine, others };
+    const surface = wallSurface();
+    enhanceWalls(mine, surface);
+    enhanceWalls(others, wallSurface(surface));
+    const sink = { value: 0 };
+    return { mine, others, surface, sink, units: sinkingUnits(sink), blank: surface.uRoofMap.value };
   }, []);
   useEffect(
     () => () => {
       walls.mine.dispose();
       walls.others.dispose();
+      walls.units.material.dispose();
+      walls.units.depth.dispose();
     },
     [walls],
   );
-  const units = useMemo(
-    () =>
-      buildRoofUnits(
-        home.map((item) => ({ ring: item.block.ring, height: item.roof })),
-        (x, y) => yard.toScene(x, y),
-        yard.roof,
-      ),
-    [yard, home],
-  );
+  useEffect(() => {
+    let live = true;
+    let glide: { stop: () => void } | null = null;
+    const show = (texture: THREE.Texture | null, fade: boolean) => {
+      if (!live || !texture) return;
+      gl.initTexture(texture);
+      walls.surface.uBrickMap.value = texture;
+      if (!fade || gl.info.render.frame === 0) {
+        walls.surface.uBrickMix.value = 1;
+        invalidate();
+        return;
+      }
+      glide = animate(0, 1, {
+        duration: SURFACE_FADE,
+        onUpdate: (share) => {
+          walls.surface.uBrickMix.value = share;
+          invalidate();
+        },
+      });
+    };
+    const held = heldMasonry();
+    if (held) show(held, false);
+    else void loadMasonry().then((texture) => show(texture, true));
+    return () => {
+      live = false;
+      glide?.stop();
+    };
+  }, [gl, walls, invalidate]);
+  useEffect(() => {
+    let live = true;
+    let glide: { stop: () => void } | null = null;
+    const set = (share: number) => {
+      walls.surface.uRoofMix.value = share;
+      walls.sink.value = share;
+      invalidate();
+    };
+    const show = (layer: RoofLayer | null, fade: boolean) => {
+      if (!live || !layer) return;
+      gl.initTexture(layer.texture);
+      walls.surface.uRoofMap.value = layer.texture;
+      walls.surface.uRoofBox.value.copy(layer.box);
+      if (!fade || gl.info.render.frame === 0) set(1);
+      else glide = animate(0, 1, { duration: SURFACE_FADE, onUpdate: set });
+    };
+    const held = heldRoofs(yard.campus, yard.middle);
+    if (held) show(held, false);
+    else void loadRoofs(yard.campus, yard.middle).then((layer) => show(layer, true));
+    return () => {
+      live = false;
+      glide?.stop();
+      walls.surface.uRoofMix.value = 0;
+      walls.sink.value = 0;
+      walls.surface.uRoofMap.value = walls.blank;
+    };
+  }, [yard, gl, walls, invalidate]);
+  const units = useMemo(() => {
+    const covered = roofBlocks(yard.campus);
+    return buildRoofUnits(
+      home.map((item) => ({ ring: item.block.ring, height: item.roof, sunk: covered.has(item.index) })),
+      (x, y) => yard.toScene(x, y),
+      yard.roof,
+    );
+  }, [yard, home]);
   useEffect(() => () => units?.dispose(), [units]);
   const press = useRef<{ x: number; y: number; at: number; index: number } | null>(null);
   return (
@@ -179,11 +243,7 @@ export function Blocks({ yard }: { yard: Yard }) {
           <meshStandardMaterial vertexColors color="#ffffff" roughness={0.92} metalness={0} />
         </mesh>
       )}
-      {units && (
-        <mesh geometry={units} castShadow receiveShadow raycast={() => null}>
-          <meshStandardMaterial color="#dfe5e4" roughness={0.9} />
-        </mesh>
-      )}
+      {units && <mesh geometry={units} material={walls.units.material} customDepthMaterial={walls.units.depth} castShadow receiveShadow raycast={() => null} />}
     </group>
   );
 }
