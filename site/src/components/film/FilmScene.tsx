@@ -9,13 +9,13 @@ import type { Story } from '@/engine/story';
 import { treeRadius } from '@/engine/growth';
 import type { Yard } from '../yard/controller';
 import { orientedBox } from '../yard/layout';
-import { Crowd, type Member } from '../yard/crowd';
-import { peekLibrary, releaseLibrary, type Library } from '../yard/library';
+import { Crowd, buildCrowd, type Member } from '../yard/crowd';
+import { nearSoon, peekLibrary, releaseLibrary, type Library } from '../yard/library';
 import { BLOB_LIFT, buildSail, treeTint } from '../yard/models';
 import { Props, primeProps, propKinds } from '../yard/props';
 import { TIERS, chipName, keepFrame, powerChoice, quality, shortChip, type Levels, type Tier } from '../yard/quality';
-import { Backdrop, Blocks, Ground, MappedTrees, Pulse, Sun, TREE_REFERENCE, blobSize, broadIn, plantKey, primeBlocks, primeGround, sunReach, treeMember, useBlob, useLibrary, useMulti, useTree } from '../yard/Scene';
-import { Prime, Stages } from '../yard/stages';
+import { Backdrop, Blocks, Ground, MappedTrees, Pulse, Sun, TREE_KINDS, TREE_REFERENCE, blobSize, broadIn, plantKey, primeBlocks, primeGround, sunReach, treeMember, useBlob, useLibrary, useMulti, useTree } from '../yard/Scene';
+import { Prime, Stages, useCrowd, useSettled } from '../yard/stages';
 import { useAntialias } from '../yard/YardCanvas';
 import type { Days } from './Film';
 import { BEATS, film } from './state';
@@ -188,7 +188,8 @@ function Trees({ yard, story, state }: { yard: Yard; story: Story; state: Shared
   );
 }
 
-function StoryTrees({ yard, story, state, library, levels }: { yard: Yard; story: Story; state: Shared; library: Library; levels: Levels }) {
+function StoryTrees({ yard, story, state, library: given, levels }: { yard: Yard; story: Story; state: Shared; library: Library; levels: Levels }) {
+  const library = useSettled(given, TREE_KINDS);
   const blob = useBlob();
   const blobs = useRef<THREE.InstancedMesh>(null);
   const seen = useRef({ plant: -1, grow: -1 });
@@ -196,20 +197,23 @@ function StoryTrees({ yard, story, state, library, levels }: { yard: Yard; story
   const multi = useMulti();
   const spots = useMemo(() => story.trees.map((tree) => yard.toScene(tree.x, tree.y)), [story, yard]);
   const tints = useMemo(() => story.trees.map((_, index) => treeTint(index)), [story]);
-  const crowd = useMemo(
-    () =>
-      new Crowd(
-        library,
-        story.trees.map((tree, index) => treeMember(library, tree, plantKey(index + 1), spots[index][0], spots[index][2], tints[index], SAPLING, 0)),
-        { edges: levels.trees, reference: TREE_REFERENCE, floor: levels.floor, bulk: multi ? 2 : 0, candidates: broadIn(library) },
-      ),
+  const members = () => story.trees.map((tree, index) => treeMember(library, tree, plantKey(index + 1), spots[index][0], spots[index][2], tints[index], SAPLING, 0));
+  const options = { edges: levels.trees, reference: TREE_REFERENCE, floor: levels.floor, bulk: multi ? 2 : 0, candidates: broadIn(library) };
+  const crowd = useCrowd(
+    () => new Crowd(library, members(), options),
     [library, story, spots, tints, levels, multi],
+    (pause) => buildCrowd(library, members(), options, pause),
   );
-  useEffect(() => () => crowd.dispose(), [crowd]);
+  const drawn = useRef(crowd);
   const tools = useMemo(() => ({ member: { model: '', matrix: new THREE.Matrix4(), tint: null, size: 1 } as Member, matrix: new THREE.Matrix4(), flat: new THREE.Quaternion(), at: new THREE.Vector3(), size: new THREE.Vector3() }), []);
 
   useFrame((frame) => {
     const mesh = blobs.current;
+    if (drawn.current !== crowd) {
+      drawn.current = crowd;
+      seen.current.plant = -1;
+      seen.current.grow = -1;
+    }
     if (mesh && (Math.abs(seen.current.plant - state.plant) >= 0.0005 || Math.abs(seen.current.grow - state.grow) >= 0.0005)) {
       seen.current.plant = state.plant;
       seen.current.grow = state.grow;
@@ -691,7 +695,9 @@ export default function FilmScene(props: Props) {
 function FilmCanvas({ yard, days, story, onFrame, debug, tier, antialias }: Props & { tier: Tier; antialias: boolean }) {
   const shared = useMemo<Shared>(() => ({ plant: 0, grow: SAPLING, draw: 0, move: 0, sail: 0, zoom: 1000 }), []);
   const [ready, setReady] = useState(false);
-  const library = useLibrary(yard.campus.trees.some((tree) => tree.needle === true));
+  const conifers = yard.campus.trees.some((tree) => tree.needle === true);
+  const library = useLibrary(conifers);
+  useEffect(() => (ready ? nearSoon(conifers) : undefined), [ready, conifers]);
   const levels = TIERS[tier].levels;
   const reach = sunReach(yard);
   return (

@@ -2,7 +2,7 @@ import { PerformanceMonitor } from '@react-three/drei';
 import { Canvas } from '@react-three/fiber';
 import { useEffect, useState, type RefObject } from 'react';
 import type { Yard } from './controller';
-import { peekLibrary, releaseLibrary, type Library } from './library';
+import { nearSoon, peekLibrary, releaseLibrary, type Library } from './library';
 import { TIERS, keepFrame, powerChoice, quality, type Tier } from './quality';
 import { Scene, useLibrary } from './Scene';
 
@@ -23,6 +23,7 @@ export default function YardCanvas(props: Props) {
 function Surface({ yard, layer, tier, drawn, conifers, antialias, onReady }: Props & { antialias: boolean }) {
   const library: Library | null = useLibrary(conifers);
   const [ready, setReady] = useState(false);
+  useEffect(() => (ready ? nearSoon(conifers) : undefined), [ready, conifers]);
   return (
     <Canvas
       shadows

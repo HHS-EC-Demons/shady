@@ -34,6 +34,7 @@ import { SchoolPicker } from './SchoolPicker';
 import { OpenShared } from './ShareDialogs';
 import { adopt, clashes, dropHash, sharedBundle, sharedText, watchHash } from './shared';
 import { carry, cutTree, editHeight, editSurface, fixesOf, keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
+import { earlyPack } from './early';
 
 const YardCanvas = lazy(() => import('./YardCanvas'));
 const Still = lazy(() => import('../plan/PlanSheet').then((module) => ({ default: module.Map })));
@@ -830,7 +831,11 @@ export default function YardStage({ base }: { base: string }) {
     const found = shared === null ? readFound(new URLSearchParams(window.location.search).get('school')) : null;
     if (shared === null && new URLSearchParams(window.location.search).has('school')) window.history.replaceState(window.history.state, '', window.location.pathname);
     const ready = kept && kept.weather === kept.bundle.weather ? Promise.resolve(kept.bundle) : loadBundle(base);
-    if (canDraw()) void import('./library').then(({ loadLibrary }) => loadLibrary(base));
+    if (canDraw()) {
+      void earlyPack(base).catch(() => undefined);
+      void import('./library').then(({ loadLibrary }) => loadLibrary(base));
+      void import('./YardCanvas');
+    }
     fallback.current = ready;
     if (found) {
       setPicking(true);

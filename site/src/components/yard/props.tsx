@@ -6,13 +6,13 @@ import type { Yard } from './controller';
 import type { Gear } from '@/engine/sports';
 import { along, axisHeading, bandPads, courts, fields, lightPoles, onRoof, parkingStalls, thin, walkers, type Area } from './layout';
 import { Clay, type Vec } from './clay';
-import { Crowd, type Member } from './crowd';
+import { Crowd, buildCrowd, type CrowdOptions, type Member } from './crowd';
 import { chooseCar, choosePerson, mix, type Role } from './forest';
 import { buildGear, type GearMeshes } from './gear';
 import type { Kind as ModelKind, Library } from './library';
 import { BLOB_LIFT, buildBlob } from './models';
 import { TIERS, type Levels, type PropLevel } from './quality';
-import { keep, take } from './stages';
+import { keep, take, useCrowd, useSettled } from './stages';
 
 type Placement = { x: number; y: number; heading: number; stretch?: number; color?: THREE.Color; kind?: string };
 type Kind = 'cars' | 'poles' | 'nets' | 'posts' | 'goals' | 'people';
@@ -447,7 +447,9 @@ function sizeOf(kind: string): number {
   return SIZES[kind.slice(0, kind.indexOf('-'))] ?? PROP_REFERENCE;
 }
 
-function crowdOf(yard: Yard, library: Library, lists: Record<Kind, Placement[]>, levels: Levels, shadows: boolean, multi: boolean): { crowd: Crowd; box: THREE.Box3 } {
+type Crowded = { crowd: Crowd; box: THREE.Box3; kinds: string; object: THREE.Object3D; dispose: () => void };
+
+function membersOf(yard: Yard, library: Library, lists: Record<Kind, Placement[]>): { members: Member[]; box: THREE.Box3 } {
   const members: Member[] = [];
   const box = new THREE.Box3();
   const spot = new THREE.Vector3();
@@ -463,10 +465,21 @@ function crowdOf(yard: Yard, library: Library, lists: Record<Kind, Placement[]>,
       members.push({ model: item.kind, matrix: new THREE.Matrix4().compose(spot, turn, one), tint: item.color ?? null, size: sizeOf(item.kind) });
     }
   }
-  return { crowd: new Crowd(library, members, { edges: [levels.props], reference: PROP_REFERENCE, floor: shadows ? 1 : null, bulk: multi ? 1 : 0 }), box };
+  return { members, box };
 }
 
-export function Props({ yard, level = TIERS.high.props, library = null, levels = TIERS.high.levels }: { yard: Yard; level?: PropLevel; library?: Library | null; levels?: Levels }) {
+function wrap(crowd: Crowd, box: THREE.Box3, library: Library): Crowded {
+  return { crowd, box, kinds: propKinds(library), object: crowd.object, dispose: () => crowd.dispose() };
+}
+
+function crowdOptions(levels: Levels, shadows: boolean, multi: boolean): CrowdOptions {
+  return { edges: [levels.props], reference: PROP_REFERENCE, floor: shadows ? 1 : null, bulk: multi ? 1 : 0 };
+}
+
+const PROP_KINDS: readonly ModelKind[] = ['cars', 'poles', 'people'];
+
+export function Props({ yard, level = TIERS.high.props, library: given = null, levels = TIERS.high.levels }: { yard: Yard; level?: PropLevel; library?: Library | null; levels?: Levels }) {
+  const library = useSettled(given, PROP_KINDS);
   const models = useMemo(buildModels, []);
   const blob = useMemo(buildBlob, []);
   const multi = useThree((state) => state.gl.extensions.has('WEBGL_multi_draw'));
@@ -483,14 +496,28 @@ export function Props({ yard, level = TIERS.high.props, library = null, levels =
     },
     [models, blob],
   );
-  const built = useMemo(() => {
-    if (!level) return { meshes: [], crowd: null };
-    const kinds = propKinds(library);
-    const { lists: placed, gear } = take(yard, placedKey(level, kinds), () => placeAll(yard, level, kinds));
-    const crowd = library && kinds ? crowdOf(yard, library, placed, levels, level.shadows, multi) : null;
+  const kinds = propKinds(library);
+  const spread = useMemo(() => (level ? take(yard, placedKey(level, kinds), () => placeAll(yard, level, kinds)) : null), [yard, level, kinds]);
+  const crowd = useCrowd(
+    () => {
+      if (!level || !spread || !library || !kinds) return null;
+      const { members, box } = membersOf(yard, library, spread.lists);
+      return wrap(new Crowd(library, members, crowdOptions(levels, level.shadows, multi)), box, library);
+    },
+    [yard, level, spread, library, levels, multi],
+    async (pause) => {
+      if (!level || !spread || !library || !kinds) return null;
+      const { members, box } = membersOf(yard, library, spread.lists);
+      return wrap(await buildCrowd(library, members, crowdOptions(levels, level.shadows, multi), pause), box, library);
+    },
+  );
+  const drawn = crowd ? crowd.kinds : '';
+  const meshes = useMemo(() => {
+    if (!level || !spread) return [];
+    const { lists: placed, gear } = spread;
     const modelled = (kind: Kind) => {
       const own = CROWDED.get(kind);
-      return crowd !== null && own !== undefined && kinds.includes(own);
+      return own !== undefined && drawn.includes(own);
     };
     const shades = blobs(yard, blob, placed.cars);
     const merged: { kind: string; mesh: THREE.Mesh }[] = [];
@@ -516,18 +543,16 @@ export function Props({ yard, level = TIERS.high.props, library = null, levels =
       ...merged,
       ...(shades ? [{ kind: 'car shades', mesh: shades as THREE.Mesh }] : []),
     ];
-    return { meshes, crowd };
-  }, [yard, level, models, blob, library, levels, multi]);
-  const { meshes, crowd } = built;
+    return meshes;
+  }, [yard, level, models, blob, spread, drawn]);
   useEffect(
     () => () => {
       for (const { mesh } of meshes) {
         if (mesh instanceof THREE.InstancedMesh) mesh.dispose();
         else mesh.geometry.dispose();
       }
-      crowd?.crowd.dispose();
     },
-    [meshes, crowd],
+    [meshes],
   );
   const reach = useMemo(() => {
     const box = new THREE.Box3();
@@ -542,10 +567,13 @@ export function Props({ yard, level = TIERS.high.props, library = null, levels =
       }
     }
     return { box, shown: true };
-  }, [meshes]);
+  }, [meshes, crowd]);
   useFrame((state) => {
     if (meshes.length === 0 && !crowd) return;
-    crowd?.crowd.update(state.camera, state.gl.domElement.height);
+    if (crowd) {
+      crowd.crowd.object.visible = reach.shown;
+      crowd.crowd.update(state.camera, state.gl.domElement.height);
+    }
     const camera = state.camera as THREE.PerspectiveCamera;
     const fov = camera.isPerspectiveCamera ? camera.fov : 30;
     const zoom = camera.isPerspectiveCamera ? camera.zoom : 1;

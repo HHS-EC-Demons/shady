@@ -13,12 +13,12 @@ import { probeHeight, sunReach, treeHeight, treeRadius, type PlanTree, type Yard
 import { Ground, primeGround } from './ground';
 import { BLOB_LIFT, buildBlob, buildBlock, buildCone, buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint, type BlockLook, type BlockModel } from './models';
 import { buildStructures } from './covers';
-import { Crowd, SHADOW_LAYER, type Member } from './crowd';
+import { Crowd, SHADOW_LAYER, buildCrowd, type Member } from './crowd';
 import { TREE_SHAPES, chooseTree, mix, modelled, spotHash, type TreeShape } from './forest';
-import { peekLibrary, watchLibrary, type Library } from './library';
+import { peekLibrary, watchLibrary, type Kind, type Library } from './library';
 import { Props, primeProps, propKinds } from './props';
 import { TIERS, type Levels, type PropLevel } from './quality';
-import { Prime, Stages, keep, take } from './stages';
+import { Prime, Stages, keep, take, useCrowd, useSettled } from './stages';
 
 const INK = '#12261c';
 const LEAF = '#2f6243';
@@ -299,6 +299,8 @@ export function useLibrary(conifers: boolean): Library | null {
   return useSyncExternalStore(watchLibrary, () => peekLibrary(conifers), () => null);
 }
 
+export const TREE_KINDS: readonly Kind[] = ['broadleaf', 'conifers'];
+
 export function useMulti(): boolean {
   return useThree((state) => state.gl.extensions.has('WEBGL_multi_draw'));
 }
@@ -309,8 +311,9 @@ export function drawable(library: Library | null, tree: { needle?: boolean }): b
 
 export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true, library = null, levels = TIERS.high.levels }: MappedProps) {
   const trees = useMemo(() => shownTrees(yard.campus, most), [yard.campus, most]);
-  const real = useMemo(() => trees.filter((tree) => drawable(library, tree)), [trees, library]);
-  const plain = useMemo(() => trees.filter((tree) => !drawable(library, tree)), [trees, library]);
+  const kinds = library ? [...library.kinds].sort().join(' ') : '';
+  const real = useMemo(() => trees.filter((tree) => drawable(library, tree)), [trees, kinds]);
+  const plain = useMemo(() => trees.filter((tree) => !drawable(library, tree)), [trees, kinds]);
   return (
     <>
       {library && real.length > 0 && <ModelTrees yard={yard} trees={real} grounded={grounded} library={library} levels={levels} />}
@@ -319,19 +322,23 @@ export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true,
   );
 }
 
-function ModelTrees({ yard, trees, grounded, library, levels }: { yard: Yard; trees: Tree[]; grounded: boolean; library: Library; levels: Levels }) {
+function ModelTrees({ yard, trees, grounded, library: given, levels }: { yard: Yard; trees: Tree[]; grounded: boolean; library: Library; levels: Levels }) {
+  const library = useSettled(given, TREE_KINDS);
   const blob = useBlob();
   const blobs = useRef<THREE.InstancedMesh>(null);
   const multi = useMulti();
-  const crowd = useMemo(() => {
-    const members = trees.map((tree) => {
+  const members = () =>
+    trees.map((tree) => {
       const key = spotHash(tree.x, tree.y);
       const [x, , z] = yard.toScene(tree.x, tree.y);
       return treeMember(library, tree, key, x, z, treeTint(key).multiply(QUIET_LEAVES));
     });
-    return new Crowd(library, members, { edges: levels.trees, reference: TREE_REFERENCE, floor: levels.floor, bulk: multi ? 2 : 0 });
-  }, [library, trees, yard, levels, multi]);
-  useEffect(() => () => crowd.dispose(), [crowd]);
+  const options = { edges: levels.trees, reference: TREE_REFERENCE, floor: levels.floor, bulk: multi ? 2 : 0 };
+  const crowd = useCrowd(
+    () => new Crowd(library, members(), options),
+    [library, trees, yard, levels, multi],
+    (pause) => buildCrowd(library, members(), options, pause),
+  );
   useFrame((state) => {
     crowd.update(state.camera, state.gl.domElement.height);
   });
@@ -618,7 +625,8 @@ function Ghost({ yard, library, ghost }: { yard: Yard; library: Library; ghost: 
     [materials],
   );
   const choice = chooseTree({ radius: treeRadius(yard.years), height: treeHeight(yard.years) }, plantKey(yard.upcoming()), shapesIn(library));
-  const parts = library.models.get(choice.model)?.levels[1] ?? [];
+  const levels = library.models.get(choice.model)?.levels ?? [];
+  const parts = levels[1] ?? levels[levels.length - 1] ?? [];
   const [x, , z] = yard.toScene(ghost.x, ghost.y);
   const set = ghost.ok ? materials.ok : materials.no;
   return (
@@ -646,16 +654,21 @@ function Plan({ yard, library = null, levels = TIERS.high.levels }: { yard: Yard
   const blob = useBlob();
   const ids = yard.trees.map((tree) => tree.id).join(' ');
   const multi = useMulti();
-  const leafy = library && library.kinds.has('broadleaf') ? library : null;
-  const grove = useMemo<Grove>(() => {
-    if (!leafy || !grown) return null;
-    const members = yard.trees.map((tree) => {
+  const settled = useSettled(library, TREE_KINDS);
+  const leafy = settled && settled.kinds.has('broadleaf') ? settled : null;
+  const members = (from: Library) =>
+    yard.trees.map((tree) => {
       const [x, , z] = yard.toScene(tree.x, tree.y);
-      return treeMember(leafy, tree, plantKey(tree.id), x, z, treeTint(tree.id));
+      return treeMember(from, tree, plantKey(tree.id), x, z, treeTint(tree.id));
     });
-    return { library: leafy, crowd: new Crowd(leafy, members, { edges: levels.trees, reference: TREE_REFERENCE, floor: levels.floor, bulk: multi ? 2 : 0, candidates: broadIn(leafy) }) };
-  }, [leafy, grown, ids, levels, yard, multi]);
-  useEffect(() => () => grove?.crowd.dispose(), [grove]);
+  const options = (from: Library) => ({ edges: levels.trees, reference: TREE_REFERENCE, floor: levels.floor, bulk: multi ? 2 : 0, candidates: broadIn(from) });
+  const crowd = useCrowd(
+    () => (leafy && grown ? new Crowd(leafy, members(leafy), options(leafy)) : null),
+    [leafy, grown, levels, yard, multi],
+    async (pause) => (leafy && grown ? buildCrowd(leafy, members(leafy), options(leafy), pause) : null),
+    ids,
+  );
+  const grove = useMemo<Grove>(() => (crowd && leafy ? { library: leafy, crowd } : null), [crowd, leafy]);
   useFrame((state) => {
     grove?.crowd.update(state.camera, state.gl.domElement.height);
   });
