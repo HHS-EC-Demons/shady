@@ -56,13 +56,14 @@ export type Block = {
 };
 export type Tree = { x: number; y: number; radius: number; height: number; photo?: boolean; needle?: boolean };
 export type Sighting = { source: string; date: string; fields: number[] };
+export type RoofPhoto = { src: string; date: string; minX: number; minY: number; maxX: number; maxY: number; blocks: number[] };
 export type Cover = { id: number; ring: Ring; height: number; home: boolean; solar?: boolean };
 export type EdgeKind = 'fence' | 'wall' | 'hedge';
 export type Edge = { kind: EdgeKind; line: Ring; height: number };
 export type ThingKind = 'flagpole' | 'bench' | 'bikes' | 'lamp' | 'door' | 'main door';
 export type Thing = { kind: ThingKind; x: number; y: number };
 
-export const CAMPUS_VERSION = 3;
+export const CAMPUS_VERSION = 4;
 
 export type Campus = {
   version?: number;
@@ -79,6 +80,7 @@ export type Campus = {
   covers?: Cover[];
   edges?: Edge[];
   things?: Thing[];
+  roofs?: RoofPhoto | null;
 };
 
 export function outdated(campus: Campus): boolean {
