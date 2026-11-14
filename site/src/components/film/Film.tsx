@@ -28,6 +28,7 @@ function prepare(base: string, story: Story): Promise<Ready> {
     report(0.12);
     warmUp(2);
     const scene = import('./FilmScene');
+    const models = import('../yard/library').then(({ loadLibrary }) => loadLibrary(base));
     const answer = await fetch(`${base}campus/heritage.json`);
     if (!answer.ok) throw new Error('campus');
     const bundle = (await answer.json()) as Bundle;
@@ -46,6 +47,8 @@ function prepare(base: string, story: Story): Promise<Ready> {
     void Promise.all([sail, full]).then(() => yard.close());
     report(0.74);
     await scene;
+    if (bundle.campus.trees.some((tree) => tree.needle === true)) await import('../yard/library').then(({ loadLibrary }) => loadLibrary(base, true));
+    else await models;
     report(0.86);
     const ready: Ready = { yard, days };
     done.set(base, ready);

@@ -405,7 +405,7 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, aim,
         </p>
         {painted && solid && (
           <Suspense fallback={null}>
-            <YardCanvas yard={yard} layer={layer} tier={tier} drawn={drawn} onReady={() => setDrawn(true)} />
+            <YardCanvas yard={yard} layer={layer} tier={tier} drawn={drawn} conifers={yard.campus.trees.some((tree) => tree.needle === true)} onReady={() => setDrawn(true)} />
           </Suspense>
         )}
         {!solid && (
@@ -684,6 +684,10 @@ export default function YardStage({ base }: { base: string }) {
       previous = kept ? kept.yard : null;
       kept = { key, bundle: next, weather, yard: built };
     }
+    if (canDraw()) {
+      const { loadLibrary } = await import('./library');
+      await loadLibrary(base, next.campus.trees.some((tree) => tree.needle === true));
+    }
     if (turn !== turns.current) return;
     if (previous && previous.campus.center.lat === built.campus.center.lat && previous.campus.center.lon === built.campus.center.lon) built.cursor = previous.cursor;
     built.gone = next.was?.trees ?? [];
@@ -826,6 +830,7 @@ export default function YardStage({ base }: { base: string }) {
     const found = shared === null ? readFound(new URLSearchParams(window.location.search).get('school')) : null;
     if (shared === null && new URLSearchParams(window.location.search).has('school')) window.history.replaceState(window.history.state, '', window.location.pathname);
     const ready = kept && kept.weather === kept.bundle.weather ? Promise.resolve(kept.bundle) : loadBundle(base);
+    if (canDraw()) void import('./library').then(({ loadLibrary }) => loadLibrary(base));
     fallback.current = ready;
     if (found) {
       setPicking(true);
