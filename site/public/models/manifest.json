@@ -319,6 +319,14 @@
    "author": "Daniel Greenheck",
    "licence": "MIT",
    "bytes": 73590
+  },
+  {
+   "name": "far",
+   "kind": "far levels",
+   "source": "pipeline/models_far.mjs",
+   "author": "made here from the models above",
+   "licence": "each model keeps its own licence above",
+   "bytes": 115924
   }
  ]
 }
