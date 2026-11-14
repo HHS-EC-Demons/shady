@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Campus } from '@/engine/campus';
 import { YEARS, treeHeight, treeRadius } from '@/engine/growth';
-import { CARS, STRETCH_HIGH, STRETCH_LOW, TREE_SHAPES, arrived, chooseCar, choosePerson, chooseTree, levelFor, modelled, nearOrder, phaseOf, reach, spotHash } from './forest';
+import { slowOf } from './early';
+import { CARS, STRETCH_HIGH, STRETCH_LOW, TREE_SHAPES, arrived, chooseCar, choosePerson, chooseTree, levelFor, modelled, nearOrder, phaseOf, reach, spotHash, wantsNear } from './forest';
 import { TIERS } from './quality';
 
 const { campus } = JSON.parse(readFileSync(new URL('../../../public/campus/heritage.json', import.meta.url), 'utf8')) as { campus: Campus };
@@ -174,5 +175,33 @@ describe('two phases', () => {
     expect(phaseOf(far, full, 'cars')).toBe('far');
     expect(phaseOf(far, full, 'people')).toBe('full');
     expect(phaseOf(far, full, 'poles')).toBe('none');
+  });
+});
+
+describe('near levels on demand', () => {
+  const far = [null, null, ['crown']];
+  const full = [['a'], ['b'], ['c']];
+
+  it('asks for a kind only when a member on screen sits inside its middle distance', () => {
+    expect(wantsNear(far, 1, 2, true)).toBe(true);
+    expect(wantsNear(far, 0, 2, true)).toBe(true);
+    expect(wantsNear(far, 2, 2, true)).toBe(false);
+    expect(wantsNear(far, 1, 2, false)).toBe(false);
+  });
+
+  it('stops asking once the nearer levels are in', () => {
+    expect(wantsNear(full, 0, 2, true)).toBe(false);
+    expect(wantsNear(full, 1, 2, true)).toBe(false);
+    expect(wantsNear([null, ['body']], 0, 1, true)).toBe(true);
+    expect(wantsNear([['near'], ['body']], 0, 1, true)).toBe(false);
+  });
+
+  it('skips the early download on slow or saving connections', () => {
+    expect(slowOf(undefined)).toBe(false);
+    expect(slowOf({ effectiveType: '4g' })).toBe(false);
+    expect(slowOf({ effectiveType: '3g' })).toBe(true);
+    expect(slowOf({ effectiveType: '2g' })).toBe(true);
+    expect(slowOf({ effectiveType: 'slow-2g' })).toBe(true);
+    expect(slowOf({ effectiveType: '4g', saveData: true })).toBe(true);
   });
 });

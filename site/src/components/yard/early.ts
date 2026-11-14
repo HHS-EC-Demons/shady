@@ -12,18 +12,83 @@ type Chunk = {
   images?: { uri?: string }[];
 };
 
-const NEEDLES = new Set(TREE_SHAPES.filter((shape) => shape.kind === 'conifer').map((shape) => shape.name));
-const blobs = new Map<string, Promise<Blob>>();
-let pack: Promise<Packed> | null = null;
+type Yielding = { yield?: () => Promise<void> };
+type Link = { saveData?: boolean; effectiveType?: string };
+type Quiet = RequestInit & { priority?: 'low' | 'high' | 'auto' };
 
-function blob(address: string): Promise<Blob> {
-  return fetch(address).then((answer) => {
+const NEEDLES = new Set(TREE_SHAPES.filter((shape) => shape.kind === 'conifer').map((shape) => shape.name));
+const SLOW_LINKS = new Set(['slow-2g', '2g', '3g']);
+const blobs = new Map<string, Promise<Blob>>();
+const files = new Map<string, Promise<ArrayBuffer>>();
+const taken = new Set<string>();
+let pack: Promise<Packed> | null = null;
+let fetching = false;
+
+export function nextTask(): Promise<void> {
+  const scheduler = (globalThis as { scheduler?: Yielding }).scheduler;
+  if (scheduler && typeof scheduler.yield === 'function') return scheduler.yield();
+  return new Promise((resolve) => window.setTimeout(resolve, 0));
+}
+
+function blob(address: string, quiet = false): Promise<Blob> {
+  return fetch(address, quiet ? ({ priority: 'low' } as Quiet) : undefined).then((answer) => {
     if (!answer.ok) throw new Error('picture');
     return answer.blob();
   });
 }
 
+function bytes(address: string, quiet = false): Promise<ArrayBuffer> {
+  return fetch(address, quiet ? ({ priority: 'low' } as Quiet) : undefined).then((answer) => {
+    if (!answer.ok) throw new Error('model');
+    return answer.arrayBuffer();
+  });
+}
+
+export function takeBytes(address: string): Promise<ArrayBuffer> {
+  taken.add(address);
+  const known = files.get(address) ?? bytes(address);
+  files.delete(address);
+  return known;
+}
+
+export function slowOf(link: Link | undefined): boolean {
+  return link?.saveData === true || SLOW_LINKS.has(link?.effectiveType ?? '');
+}
+
+export function slowLink(): boolean {
+  return slowOf((globalThis.navigator as (Navigator & { connection?: Link }) | undefined)?.connection);
+}
+
+export async function fetchAhead(addresses: readonly string[]): Promise<void> {
+  if (fetching || slowLink()) return;
+  fetching = true;
+  try {
+    for (const address of addresses) {
+      if (files.has(address) || taken.has(address)) continue;
+      const run = bytes(address, true);
+      files.set(address, run);
+      run.catch(() => files.delete(address));
+      const buffer = await run.catch(() => null);
+      if (!buffer) continue;
+      for (const image of imagesOf(chunkOf(buffer), address)) {
+        if (blobs.has(image) || taken.has(image)) continue;
+        const picture = blob(image, true);
+        blobs.set(image, picture);
+        picture.catch(() => blobs.delete(image));
+        await picture.catch(() => null);
+      }
+    }
+  } finally {
+    fetching = false;
+  }
+}
+
+function imagesOf(json: Chunk, address: string): string[] {
+  return (json.images ?? []).flatMap((image) => (image.uri ? [new URL(image.uri, address).href] : []));
+}
+
 export function takeBlob(address: string): Promise<Blob> {
+  taken.add(address);
   const known = blobs.get(address) ?? blob(address);
   blobs.delete(address);
   return known;

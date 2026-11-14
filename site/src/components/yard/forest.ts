@@ -147,6 +147,10 @@ export function arrived(levels: readonly unknown[], level: number): number {
   return -1;
 }
 
+export function wantsNear(levels: readonly unknown[], level: number, top: number, seen: boolean): boolean {
+  return seen && level < top && arrived(levels, level) > level;
+}
+
 export function nearOrder(conifers: boolean): string[] {
   return conifers ? ['broadleaf', 'cars', 'poles', 'people', 'conifers'] : ['broadleaf', 'cars', 'poles', 'people'];
 }

@@ -2,8 +2,7 @@ import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
 import { CARS, TREE_SHAPES, nearOrder, phaseOf } from './forest';
-import { MODELS_VERSION, earlyPack, takeBlob } from './early';
-import { nextTask } from './stages';
+import { MODELS_VERSION, earlyPack, fetchAhead, nextTask, takeBlob, takeBytes } from './early';
 
 export { MODELS_VERSION } from './early';
 export const LEVELS = ['lod0', 'lod1', 'lod2'];
@@ -22,13 +21,14 @@ export const KINDS: Record<Kind, string[]> = {
 };
 
 const CORE: Kind[] = ['broadleaf', 'cars', 'poles', 'people'];
-const NEAR_DELAY_MS = 250;
+const IDLE_AFTER_MS = 6000;
+const IDLE_WAIT_MS = 4000;
 const PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 export type Look = { key: string; name: string; map: THREE.Texture | null; cutoff: number; double: boolean; colors: boolean; rough: number };
 export type Part = { look: string; geometry: THREE.BufferGeometry; color: THREE.Color };
 export type Model = { name: string; levels: (Part[] | null)[] };
-export type Library = { models: Map<string, Model>; looks: Map<string, Look>; kinds: Set<Kind>; full: Set<Kind> };
+export type Library = { models: Map<string, Model>; looks: Map<string, Look>; kinds: Set<Kind>; full: Set<Kind>; conifers: boolean };
 
 type Loaded = { models: Model[]; looks: Look[] };
 type Picture = ImageBitmap | HTMLImageElement;
@@ -39,14 +39,16 @@ type Pack = { gltf: GLTF; address: string };
 const done = new Map<string, Loaded>();
 const flying = new Map<string, Promise<Loaded | null>>();
 const waiting = new Map<string, number>();
+const asked = new Set<string>();
 const pictures = new Map<string, Promise<Picture>>();
 const textures = new Map<string, THREE.Texture>();
 const listeners = new Set<() => void>();
 const merged = new Map<string, Library | null>();
 let packing: Promise<Pack | null> | null = null;
 let packed: Pack | null = null;
-let nearing: Promise<void> | null = null;
+let preparing: Promise<unknown> = Promise.resolve();
 let needles = false;
+let idling = false;
 let telling = false;
 let place = '';
 let version = 0;
@@ -290,18 +292,19 @@ async function farSet(base: string, names: string[]): Promise<Loaded | null> {
   }
 }
 
-async function fullSet(base: string, names: string[]): Promise<Loaded | null> {
-  const addresses = names.map((name) => new URL(`${base}models/${name}.glb?v=${MODELS_VERSION}`, window.location.href).href);
-  const downloads = addresses.map((address) =>
-    fetch(address).then((answer) => {
-      if (!answer.ok) throw new Error('model');
-      return answer.arrayBuffer();
-    }),
-  );
+function fileOf(base: string, name: string): string {
+  return new URL(`${base}models/${name}.glb?v=${MODELS_VERSION}`, window.location.href).href;
+}
+
+async function fullSet(base: string, names: string[], far: Loaded | undefined): Promise<Loaded | null> {
+  const addresses = names.map((name) => fileOf(base, name));
+  const downloads = addresses.map((address) => takeBytes(address));
   for (const download of downloads) download.catch(() => undefined);
   try {
     const looks = new Map<string, Look>();
     const models: Model[] = [];
+    const known = new Map((far?.models ?? []).map((model) => [model.name, model]));
+    for (const look of far?.looks ?? []) looks.set(look.key, look);
     for (let which = 0; which < names.length; which += 1) {
       const name = names[which];
       const address = addresses[which];
@@ -320,7 +323,12 @@ async function fullSet(base: string, names: string[]): Promise<Loaded | null> {
       gltf.scene.updateMatrixWorld(true);
       await nextTask();
       const levels: (Part[] | null)[] = [];
-      for (const level of LEVELS.slice(0, levelsOf(name))) {
+      for (const [index, level] of LEVELS.slice(0, levelsOf(name)).entries()) {
+        const kept = known.get(name)?.levels[index];
+        if (kept) {
+          levels.push(kept);
+          continue;
+        }
         const node = gltf.scene.getObjectByName(level);
         if (!node) throw new Error('model');
         const parts: Part[] = [];
@@ -357,7 +365,7 @@ function attempt(base: string, kind: Kind, stage: Stage): Promise<Loaded | null>
   if (known) return Promise.resolve(known);
   let run = flying.get(key);
   if (!run) {
-    run = (stage === 'far' ? farSet(base, KINDS[kind]) : fullSet(base, KINDS[kind])).then((result) => {
+    run = (stage === 'far' ? farSet(base, KINDS[kind]) : fullSet(base, KINDS[kind], done.get(`${base} ${kind} far`))).then((result) => {
       flying.delete(key);
       if (result) {
         done.set(key, result);
@@ -406,7 +414,7 @@ function build(conifers: boolean): Library | null {
       else looks.set(look.key, look);
     }
   }
-  const library = kinds.size > 0 ? { models, looks, kinds, full } : null;
+  const library = kinds.size > 0 ? { models, looks, kinds, full, conifers } : null;
   if (library) unify([...models.values()], [...looks.values()]);
   merged.set(memo, library);
   return library;
@@ -428,29 +436,54 @@ export async function loadLibrary(base: string, conifers = false): Promise<Libra
   return build(conifers);
 }
 
-export function loadNear(conifers = false): Promise<void> {
+const MODEL_KINDS = new Map((Object.keys(KINDS) as Kind[]).flatMap((kind) => KINDS[kind].map((name) => [name, kind] as const)));
+
+function prepare(kind: Kind): Promise<unknown> {
   const base = place;
-  if (conifers) needles = true;
-  if (!base) return Promise.resolve();
-  if (nearing) return nearing;
-  nearing = (async () => {
-    for (let at = 0; at < nearOrder(needles).length; at += 1) {
-      const kind = nearOrder(needles)[at] as Kind;
-      await nextTask();
-      const result = await attempt(base, kind, 'full');
-      if (!result) later(base, kind, 'full');
-    }
-  })().finally(() => {
-    nearing = null;
+  const key = `${base} ${kind} full`;
+  if (!base || done.has(key) || flying.has(key) || waiting.has(key) || asked.has(key)) return flying.get(key) ?? Promise.resolve();
+  if (kind === 'conifers' && !needles) return Promise.resolve();
+  asked.add(key);
+  preparing = preparing.then(async () => {
+    if (done.has(key) || flying.has(key)) return;
+    await nextTask();
+    const result = await attempt(base, kind, 'full');
+    if (!result) later(base, kind, 'full');
   });
-  return nearing;
+  return preparing;
+}
+
+export function demandNear(models: Iterable<string>): void {
+  for (const model of models) {
+    const kind = MODEL_KINDS.get(model);
+    if (kind) void prepare(kind);
+  }
+}
+
+function idleNext(): void {
+  const kind = nearOrder(needles).find((name) => !asked.has(`${place} ${name} full`)) as Kind | undefined;
+  if (!kind) {
+    idling = false;
+    return;
+  }
+  const go = () => void prepare(kind).then(idleNext);
+  const idle = (globalThis as { requestIdleCallback?: (run: () => void, options: { timeout: number }) => number }).requestIdleCallback;
+  if (idle) idle(go, { timeout: IDLE_WAIT_MS });
+  else window.setTimeout(go, 200);
 }
 
 export function nearSoon(conifers = false): () => void {
-  if (typeof window === 'undefined') return () => undefined;
+  if (typeof window === 'undefined' || !place) return () => undefined;
+  if (conifers) needles = true;
+  const base = place;
   let timer = 0;
   const frame = window.requestAnimationFrame(() => {
-    timer = window.setTimeout(() => void loadNear(conifers), NEAR_DELAY_MS);
+    void fetchAhead(nearOrder(needles).flatMap((kind) => KINDS[kind as Kind].map((name) => fileOf(base, name))));
+    timer = window.setTimeout(() => {
+      if (idling) return;
+      idling = true;
+      idleNext();
+    }, IDLE_AFTER_MS);
   });
   return () => {
     window.cancelAnimationFrame(frame);
