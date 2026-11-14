@@ -164,8 +164,8 @@ describe('two phases', () => {
   });
 
   it('fetches broadleaf first and conifers only when the campus has them', () => {
-    expect(nearOrder(false)).toEqual(['broadleaf', 'cars', 'poles', 'people']);
-    expect(nearOrder(true)).toEqual(['broadleaf', 'cars', 'poles', 'people', 'conifers']);
+    expect(nearOrder(false)).toEqual(['broadleaf', 'cars', 'poles', 'people', 'furniture']);
+    expect(nearOrder(true)).toEqual(['broadleaf', 'cars', 'poles', 'people', 'furniture', 'conifers']);
   });
 
   it('prefers the full set and stands each kind alone', () => {

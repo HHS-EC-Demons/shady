@@ -22,6 +22,7 @@ export const DEAD_BAND = 0.15;
 export const SCREEN = 1080;
 
 export const CARS = ['car-sedan', 'car-hatchback', 'car-suv', 'car-coupe', 'car-pickup', 'car-van'];
+export const FURNITURE = ['bench', 'bike-rack', 'lamp-walkway', 'play-slide', 'play-swings', 'play-climber', 'play-monkeybars', 'play-seesaw'];
 export const CAR_SHARES = [0.27, 0.2, 0.25, 0.1, 0.14, 0.04];
 
 const ROLES: Record<Role, { models: string[]; shares: number[] }> = {
@@ -152,7 +153,7 @@ export function wantsNear(levels: readonly unknown[], level: number, top: number
 }
 
 export function nearOrder(conifers: boolean): string[] {
-  return conifers ? ['broadleaf', 'cars', 'poles', 'people', 'conifers'] : ['broadleaf', 'cars', 'poles', 'people'];
+  return conifers ? ['broadleaf', 'cars', 'poles', 'people', 'furniture', 'conifers'] : ['broadleaf', 'cars', 'poles', 'people', 'furniture'];
 }
 
 export function phaseOf(far: ReadonlySet<string>, full: ReadonlySet<string>, kind: string): 'none' | 'far' | 'full' {

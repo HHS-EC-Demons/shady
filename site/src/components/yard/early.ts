@@ -1,12 +1,11 @@
 import { TREE_SHAPES } from './forest';
 
-export const MODELS_VERSION = 4;
+export const MODELS_VERSION = 5;
 
 export type Packed = { buffer: ArrayBuffer; address: string };
 
 type Chunk = {
-  nodes?: { name?: string; mesh?: number }[];
-  meshes?: { primitives?: { material?: number }[] }[];
+  meshes?: { primitives?: { material?: number; extras?: { parts?: [string, ...number[]][] } }[] }[];
   materials?: { pbrMetallicRoughness?: { baseColorTexture?: { index?: number } } }[];
   textures?: { source?: number; extensions?: Record<string, { source?: number }> }[];
   images?: { uri?: string }[];
@@ -103,9 +102,9 @@ function chunkOf(buffer: ArrayBuffer): Chunk {
 function prefetch(buffer: ArrayBuffer, address: string): void {
   const json = chunkOf(buffer);
   const wanted = new Set<string>();
-  for (const node of json.nodes ?? []) {
-    if (node.mesh === undefined || NEEDLES.has((node.name ?? '').split('@')[0])) continue;
-    for (const primitive of json.meshes?.[node.mesh]?.primitives ?? []) {
+  for (const mesh of json.meshes ?? []) {
+    for (const primitive of mesh.primitives ?? []) {
+      if (!(primitive.extras?.parts ?? []).some(([name]) => !NEEDLES.has(name))) continue;
       const index = json.materials?.[primitive.material ?? -1]?.pbrMetallicRoughness?.baseColorTexture?.index;
       const texture = index === undefined ? undefined : json.textures?.[index];
       const source = texture?.extensions?.EXT_texture_webp?.source ?? texture?.source;

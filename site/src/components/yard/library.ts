@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
-import { CARS, TREE_SHAPES, nearOrder, phaseOf } from './forest';
+import { CARS, FURNITURE, TREE_SHAPES, nearOrder, phaseOf } from './forest';
 import { MODELS_VERSION, earlyPack, fetchAhead, nextTask, takeBlob, takeBytes } from './early';
 
 export { MODELS_VERSION } from './early';
@@ -10,7 +10,7 @@ export const TINTED = new Set(['leaves', 'leaves-far', 'crown', 'paint', 'kit'])
 export const TREE_LOOKS = new Set(['bark', 'leaves', 'leaves-far', 'crown']);
 export const RETRY_MS = 4000;
 
-export type Kind = 'broadleaf' | 'conifers' | 'cars' | 'poles' | 'people';
+export type Kind = 'broadleaf' | 'conifers' | 'cars' | 'poles' | 'people' | 'furniture';
 
 export const KINDS: Record<Kind, string[]> = {
   broadleaf: TREE_SHAPES.filter((shape) => shape.kind !== 'conifer').map((shape) => shape.name),
@@ -18,9 +18,10 @@ export const KINDS: Record<Kind, string[]> = {
   cars: [...CARS],
   poles: ['pole-lot', 'pole-lot-double'],
   people: ['person-stand', 'person-walk', 'person-walk-b', 'person-run'],
+  furniture: [...FURNITURE],
 };
 
-const CORE: Kind[] = ['broadleaf', 'cars', 'poles', 'people'];
+const CORE: Kind[] = ['broadleaf', 'cars', 'poles', 'people', 'furniture'];
 const IDLE_AFTER_MS = 6000;
 const IDLE_WAIT_MS = 4000;
 const PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
@@ -74,7 +75,10 @@ function loader(): GLTFLoader {
   return result;
 }
 
-function floatGeometry(source: THREE.BufferGeometry, matrix: THREE.Matrix4): THREE.BufferGeometry {
+type Range = [string, number, number, number, number];
+
+function floatGeometry(source: THREE.BufferGeometry, matrix: THREE.Matrix4, range?: Range): THREE.BufferGeometry {
+  const first = range ? range[1] : 0;
   const geometry = new THREE.BufferGeometry();
   const e = matrix.elements;
   const scale = Math.hypot(e[0], e[1], e[2]);
@@ -83,7 +87,7 @@ function floatGeometry(source: THREE.BufferGeometry, matrix: THREE.Matrix4): THR
     if (!attribute) continue;
     const woven = (attribute as unknown as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute === true;
     const size = name === 'color' ? 3 : attribute.itemSize;
-    const count = attribute.count;
+    const count = range ? range[2] : attribute.count;
     const input = (woven ? (attribute as unknown as THREE.InterleavedBufferAttribute).data.array : attribute.array) as ArrayLike<number>;
     const stride = woven ? (attribute as unknown as THREE.InterleavedBufferAttribute).data.stride : attribute.itemSize;
     const offset = woven ? (attribute as unknown as THREE.InterleavedBufferAttribute).offset : 0;
@@ -92,7 +96,7 @@ function floatGeometry(source: THREE.BufferGeometry, matrix: THREE.Matrix4): THR
     const signed = input instanceof Int8Array || input instanceof Int16Array;
     for (let index = 0; index < count; index += 1) {
       for (let part = 0; part < size; part += 1) {
-        const raw = input[index * stride + offset + part] / unit;
+        const raw = input[(index + first) * stride + offset + part] / unit;
         array[index * size + part] = signed && unit !== 1 ? Math.max(raw, -1) : raw;
       }
     }
@@ -119,7 +123,8 @@ function floatGeometry(source: THREE.BufferGeometry, matrix: THREE.Matrix4): THR
     geometry.setAttribute(name, new THREE.BufferAttribute(array, size));
   }
   const index = source.getIndex();
-  if (index) geometry.setIndex(new THREE.BufferAttribute(Uint32Array.from(index.array as ArrayLike<number>), 1));
+  if (index && range) geometry.setIndex(new THREE.BufferAttribute(Uint32Array.from((index.array as Uint32Array).subarray(range[3], range[3] + range[4]), (value) => value - first), 1));
+  else if (index) geometry.setIndex(new THREE.BufferAttribute(Uint32Array.from(index.array as ArrayLike<number>), 1));
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();
   return geometry;
@@ -199,15 +204,6 @@ function unify(models: Model[], looks: Look[]): void {
   }
 }
 
-async function pictured(gltf: GLTF, node: THREE.Object3D, address: string, images: Map<string, Picture>): Promise<void> {
-  const needed = new Set<string>();
-  node.traverse((object) => {
-    const map = ((object as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined)?.map;
-    if ((object as THREE.Mesh).isMesh && map) needed.add(imageOf(gltf, map, address));
-  });
-  await Promise.all([...needed].map((image) => picture(image).then((found) => images.set(image, found))));
-}
-
 function meshesOf(node: THREE.Object3D): THREE.Mesh[] {
   const meshes: THREE.Mesh[] = [];
   node.traverse((object) => {
@@ -216,7 +212,7 @@ function meshesOf(node: THREE.Object3D): THREE.Mesh[] {
   return meshes;
 }
 
-function partOf(gltf: GLTF, mesh: THREE.Mesh, address: string, images: Map<string, Picture>, looks: Map<string, Look>): Part {
+function lookOf(gltf: GLTF, mesh: THREE.Mesh, address: string, images: Map<string, Picture>, looks: Map<string, Look>): string {
   const material = mesh.material as THREE.MeshStandardMaterial;
   const from = material.map;
   const image = from ? imageOf(gltf, from, address) : '';
@@ -227,11 +223,12 @@ function partOf(gltf: GLTF, mesh: THREE.Mesh, address: string, images: Map<strin
     const map = from && found ? textureFor(image, found, from) : null;
     looks.set(key, { key, name: material.name, map, cutoff: material.alphaTest, double: material.side === THREE.DoubleSide, colors: false, rough: material.roughness });
   }
-  return { look: key, geometry: floatGeometry(mesh.geometry, mesh.matrixWorld), color: material.color.clone() };
+  return key;
 }
 
-function partsOf(gltf: GLTF, node: THREE.Object3D, address: string, images: Map<string, Picture>, looks: Map<string, Look>): Part[] {
-  return meshesOf(node).map((mesh) => partOf(gltf, mesh, address, images, looks));
+function partOf(gltf: GLTF, mesh: THREE.Mesh, address: string, images: Map<string, Picture>, looks: Map<string, Look>, range?: Range): Part {
+  const material = mesh.material as THREE.MeshStandardMaterial;
+  return { look: lookOf(gltf, mesh, address, images, looks), geometry: floatGeometry(mesh.geometry, mesh.matrixWorld, range), color: material.color.clone() };
 }
 
 function drop(gltf: GLTF): void {
@@ -272,17 +269,19 @@ async function farSet(base: string, names: string[]): Promise<Loaded | null> {
   if (!pack) return null;
   try {
     const images = new Map<string, Picture>();
-    const nodes = names.map((name) => {
-      const level = levelsOf(name) - 1;
-      const node = pack.gltf.scene.getObjectByName(`${name}@${LEVELS[level]}`);
-      if (!node) throw new Error('model');
-      return { name, level, node };
-    });
-    for (const { node } of nodes) await pictured(pack.gltf, node, pack.address, images);
+    const wanted = new Set(names);
+    const pieces = meshesOf(pack.gltf.scene).flatMap((mesh) => ((mesh.geometry.userData.parts ?? []) as Range[]).filter((range) => wanted.has(range[0])).map((range) => ({ mesh, range })));
+    for (const name of names) if (!pieces.some(({ range }) => range[0] === name)) throw new Error('model');
+    const maps = new Set<string>();
+    for (const { mesh } of pieces) {
+      const map = (mesh.material as THREE.MeshStandardMaterial).map;
+      if (map) maps.add(imageOf(pack.gltf, map, pack.address));
+    }
+    await Promise.all([...maps].map((image) => picture(image).then((found) => images.set(image, found))));
     const looks = new Map<string, Look>();
-    const models = nodes.map(({ name, level, node }): Model => {
+    const models = names.map((name): Model => {
       const levels: (Part[] | null)[] = new Array(levelsOf(name)).fill(null);
-      levels[level] = partsOf(pack.gltf, node, pack.address, images, looks);
+      levels[levelsOf(name) - 1] = pieces.filter(({ range }) => range[0] === name).map(({ mesh, range }) => partOf(pack.gltf, mesh, pack.address, images, looks, range));
       return { name, levels };
     });
     unify(models, [...looks.values()]);
@@ -324,13 +323,14 @@ async function fullSet(base: string, names: string[], far: Loaded | undefined): 
       await nextTask();
       const levels: (Part[] | null)[] = [];
       for (const [index, level] of LEVELS.slice(0, levelsOf(name)).entries()) {
-        const kept = known.get(name)?.levels[index];
-        if (kept) {
-          levels.push(kept);
-          continue;
-        }
         const node = gltf.scene.getObjectByName(level);
         if (!node) throw new Error('model');
+        const kept = known.get(name)?.levels[index];
+        if (kept) {
+          const swap = new Map(meshesOf(node).map((mesh) => [(mesh.material as THREE.Material).name, lookOf(gltf, mesh, address, images, looks)]));
+          levels.push(kept.map((part) => ({ ...part, look: swap.get(part.look.split('@')[0]) ?? part.look })));
+          continue;
+        }
         const parts: Part[] = [];
         for (const mesh of meshesOf(node)) {
           parts.push(partOf(gltf, mesh, address, images, looks));
