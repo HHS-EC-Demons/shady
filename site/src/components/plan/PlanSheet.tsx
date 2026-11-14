@@ -76,7 +76,7 @@ function standingTrees(yard: Yard): number {
   return yard.campus.trees.filter((tree) => atHome(yard.campus, tree.x, tree.y)).length;
 }
 
-function Map({ yard }: { yard: Yard }) {
+export function Map({ yard }: { yard: Yard }) {
   const box = extentOf(yard.campus, 12);
   const standing = standingTrees(yard);
   const means = useMemo(() => yard.surfaceMeans(), [yard]);

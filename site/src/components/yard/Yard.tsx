@@ -8,7 +8,7 @@ import { TrashIcon } from '@phosphor-icons/react/dist/csr/Trash';
 import { TreeIcon } from '@phosphor-icons/react/dist/csr/Tree';
 import { UmbrellaIcon } from '@phosphor-icons/react/dist/csr/Umbrella';
 import { animate, useReducedMotion } from 'motion/react';
-import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type RefObject } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent as ReactKeyboardEvent, type PointerEvent as ReactPointerEvent, type RefObject } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
@@ -25,6 +25,7 @@ import { warmUp } from '@/engine/remote';
 import { decodePlan } from '@/engine/share';
 import { clockLabel } from '@/engine/sun';
 import { FIRST_DAY, dayWeather, lastDay, localDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
+import { canDraw } from '@/lib/utils';
 import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Cut, type Saved, type Tool } from './controller';
 import { NoWeather, Unmapped, ownHottest, picked, placeBundle, stopPhotos, type Shown, type Stage } from './loader';
 import { quality } from './quality';
@@ -35,6 +36,7 @@ import { adopt, clashes, dropHash, sharedBundle, sharedText, watchHash } from '.
 import { carry, cutTree, editHeight, editSurface, fixesOf, keepPlan, keepSchool, loadBundle, restorePlan, type Bundle } from './store';
 
 const YardCanvas = lazy(() => import('./YardCanvas'));
+const Still = lazy(() => import('../plan/PlanSheet').then((module) => ({ default: module.Map })));
 const loadCalendar = () => import('@/components/ui/calendar');
 const Calendar = lazy(() => loadCalendar().then((module) => ({ default: module.Calendar })));
 
@@ -222,8 +224,28 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, aim,
   const tier = useSyncExternalStore(quality.subscribe, quality.snapshot, quality.server);
   useSyncExternalStore(yard.subscribe, yard.snapshot, yard.snapshot);
   const still = useReducedMotion();
-  const [drawn, setDrawn] = useState(false);
+  const [solid] = useState(canDraw);
+  const [drawn, setDrawn] = useState(!solid);
   const [painted, setPainted] = useState(false);
+
+  useEffect(() => {
+    if (solid) return;
+    let frame = 0;
+    const wake = () => {
+      if (!frame) frame = window.requestAnimationFrame(run);
+    };
+    const run = () => {
+      frame = 0;
+      yard.tick(performance.now());
+      if (yard.working()) wake();
+    };
+    wake();
+    const stop = yard.subscribe(wake);
+    return () => {
+      stop();
+      window.cancelAnimationFrame(frame);
+    };
+  }, [yard, solid]);
 
   useEffect(() => {
     let timer = 0;
@@ -280,6 +302,29 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, aim,
   }, [yard]);
 
   const layer = useRef<HTMLDivElement>(null);
+  const sheet = useRef<number | null>(null);
+  const spotOf = (event: ReactPointerEvent<HTMLDivElement>): [number, number] | null => {
+    const matrix = event.currentTarget.querySelector('svg')?.getScreenCTM();
+    if (!matrix) return null;
+    const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
+    return [point.x, -point.y];
+  };
+  const press = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const spot = spotOf(event);
+    if (!spot) return;
+    if (yard.tool === 'tree') yard.plant(spot[0], spot[1]);
+    if (yard.tool !== 'sail') return;
+    sheet.current = yard.startSail(spot[0], spot[1]);
+    if (sheet.current !== null) event.currentTarget.setPointerCapture(event.pointerId);
+  };
+  const stretch = (event: ReactPointerEvent<HTMLDivElement>) => {
+    const spot = spotOf(event);
+    if (spot && sheet.current !== null) yard.stretchSail(sheet.current, spot[0], spot[1]);
+  };
+  const release = () => {
+    if (sheet.current !== null) yard.endSail(sheet.current);
+    sheet.current = null;
+  };
   const hours = useMemo(() => {
     const reach = sunReach(yard);
     const marks: { minute: number; at: string }[] = [];
@@ -358,14 +403,27 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, aim,
         <p className="sr-only" role="status" aria-live="polite">
           {said}
         </p>
-        {painted && (
+        {painted && solid && (
           <Suspense fallback={null}>
             <YardCanvas yard={yard} layer={layer} tier={tier} drawn={drawn} onReady={() => setDrawn(true)} />
           </Suspense>
         )}
+        {!solid && (
+          <div
+            className={`absolute inset-x-[var(--gutter)] bottom-36 top-32 touch-none sm:bottom-24 [&>svg]:size-full [&>svg]:max-h-none [&>svg]:rounded-none [&>svg]:border-0 [&>svg]:bg-transparent ${yard.tool === 'look' ? '' : 'cursor-crosshair'}`}
+            onPointerDown={press}
+            onPointerMove={stretch}
+            onPointerUp={release}
+            onPointerCancel={release}
+          >
+            <Suspense fallback={null}>
+              <Still key={`${yard.heat} ${yard.trees.length} ${yard.sails.length}`} yard={yard} />
+            </Suspense>
+          </div>
+        )}
         {!drawn && <Skeleton className="absolute inset-0 rounded-none bg-muted" />}
 
-        <div ref={layer} className="pointer-events-none absolute inset-0 overflow-hidden">
+        <div ref={layer} className={solid ? 'pointer-events-none absolute inset-0 overflow-hidden' : 'hidden'}>
           {hours.map((hour) => (
             <span key={hour.minute} data-at={hour.at} data-hour="" className="absolute left-0 top-0 transition-opacity duration-200" aria-hidden="true">
               <span className="data absolute -translate-x-1/2 -translate-y-1/2 whitespace-nowrap text-[0.8125rem] text-soft">{hourName(hour.minute)}</span>
@@ -447,7 +505,7 @@ function Loaded({ yard, onFind, day, onDay, onEdit, onRaise, finder, first, aim,
         </div>
         <DayChoice day={day} picked={yard.weather.date} onDay={onDay} refocus={refocus} pending={waiting} />
         <div className="absolute bottom-6 left-[var(--gutter)] flex items-center gap-2.5">
-          {yard.focus !== null && (
+          {solid && yard.focus !== null && (
             <Button variant="outline" size="icon-lg" className="size-11 bg-raised" aria-label="Show the whole campus" onClick={() => yard.lookAt(null)}>
               <ArrowsOutIcon aria-hidden="true" />
             </Button>
