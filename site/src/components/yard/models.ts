@@ -642,7 +642,7 @@ attribute float aSink;
 uniform float uSink;`;
 
 const SINK_BODY = `#include <begin_vertex>
-if ( aSink > -0.5 ) transformed.y = mix( transformed.y, aSink - 0.05, uSink );`;
+if ( aSink > -0.5 ) transformed.y = mix( transformed.y, aSink - 0.5, uSink );`;
 
 export function sinkingUnits(sink: { value: number }): { material: THREE.MeshStandardMaterial; depth: THREE.MeshDepthMaterial } {
   const patch: THREE.Material['onBeforeCompile'] = (shader) => {
