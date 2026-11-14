@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import type { HeatDay } from '@/engine/heat';
 import { warmUp } from '@/engine/remote';
 import type { Story } from '@/engine/story';
+import { canDraw } from '@/lib/utils';
 import { Yard } from '../yard/controller';
 import type { Bundle } from '../yard/store';
 import { film, measure } from './state';
@@ -53,14 +54,6 @@ function prepare(base: string, story: Story): Promise<Ready> {
   loads.set(base, run);
   run.catch(() => loads.delete(base));
   return run;
-}
-
-function canDraw(): boolean {
-  try {
-    return document.createElement('canvas').getContext('webgl2') !== null;
-  } catch {
-    return false;
-  }
 }
 
 function unseen(): boolean {

@@ -8,6 +8,7 @@ import { RAMP, TOUCH_LIMIT } from '@/engine/heat';
 import type { Found } from '@/engine/osm';
 import { clockLabel } from '@/engine/sun';
 import { hourly } from '@/engine/weather';
+import { canDraw } from '@/lib/utils';
 import { quality } from '../yard/quality';
 import type { Engine } from './remote';
 import type { Run } from './run';
@@ -155,7 +156,7 @@ function statusOf(run: Run | null): string {
 
 export default function District({ base }: { base: string }) {
   const still = useReducedMotion();
-  const [webgl] = useState(() => typeof window !== 'undefined' && 'WebGL2RenderingContext' in window);
+  const [webgl] = useState(canDraw);
   const flat = Boolean(still) || !webgl;
   const engine = useRef<Engine | null>(null);
   const [run, setRun] = useState<Run | null>(null);
