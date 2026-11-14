@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { arrived, levelFor, reach } from './forest';
+import { arrived, levelFor, reach, wantsNear } from './forest';
 import { TINTED, makeMaterial, type Library, type Look, type Model, type Part } from './library';
 
 export const SHADOW_LAYER = 1;
@@ -74,6 +74,7 @@ function solid(parts: Part[]): THREE.BufferGeometry {
 export class Crowd {
   readonly object = new THREE.Group();
   readonly members: Member[];
+  readonly wanted = new Set<string>();
   private slots: Slot[] = [];
   private herds: Herd[] = [];
   private shown = new Map<string, Herd[][]>();
@@ -428,6 +429,13 @@ export class Crowd {
       changed = true;
     }
     if (changed && this.herds.length > 0) this.pack();
+    this.wanted.clear();
+    for (let index = 0; index < this.members.length; index += 1) {
+      const member = this.members[index];
+      const level = this.levels[index];
+      const levels = this.library.models.get(member.model)?.levels;
+      if (levels && wantsNear(levels, level, this.tops[index], this.inside[index] === 1 && !member.hidden)) this.wanted.add(member.model);
+    }
     return changed;
   }
 

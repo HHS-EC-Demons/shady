@@ -1,16 +1,13 @@
 import { useThree } from '@react-three/fiber';
-import { Children, useEffect, useRef, useState, type DependencyList, type ReactNode } from 'react';
+import { Children, useEffect, useRef, useState, useSyncExternalStore, type DependencyList, type ReactNode } from 'react';
 import { BackSide, DoubleSide, FrontSide, MeshDepthMaterial, PCFShadowMap, PCFSoftShadowMap, WebGLRenderTarget } from 'three';
 import type * as THREE from 'three';
-import type { Kind, Library } from './library';
+import { nextTask } from './early';
+import { peekLibrary, watchLibrary, type Kind, type Library } from './library';
 
-type Yielding = { yield?: () => Promise<void> };
+export { nextTask };
 
-export function nextTask(): Promise<void> {
-  const scheduler = (globalThis as { scheduler?: Yielding }).scheduler;
-  if (scheduler && typeof scheduler.yield === 'function') return scheduler.yield();
-  return new Promise((resolve) => window.setTimeout(resolve, 0));
-}
+const seenPrograms = new WeakSet<object>();
 
 async function warm(gl: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, live: () => boolean): Promise<void> {
   for (const child of [...scene.children]) {
@@ -24,6 +21,7 @@ async function warm(gl: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.C
   const programs = gl.info.programs ?? [];
   for (let index = 0; index < programs.length; index += 1) {
     if (!live()) return;
+    seenPrograms.add(programs[index]);
     programs[index].getUniforms();
     programs[index].getAttributes();
     if (index % 4 === 3) await nextTask();
@@ -144,6 +142,8 @@ async function warmUp(gl: THREE.WebGLRenderer, object: THREE.Object3D, camera: T
   }
   const programs = gl.info.programs ?? [];
   for (const program of programs) {
+    if (seenPrograms.has(program)) continue;
+    seenPrograms.add(program);
     await nextTask();
     program.getUniforms();
     program.getAttributes();
@@ -207,6 +207,19 @@ export function useCrowd<T extends Held | null>(make: () => T, deps: DependencyL
   useEffect(() => () => drop(shown.current), []);
   return now.value;
 }
+
+export function useShell<L extends Library | null>(library: L): L {
+  const key = library ? [...library.kinds].sort().join(' ') : '';
+  const held = useRef({ key, library });
+  if (held.current.key !== key) held.current = { key, library };
+  return held.current.library;
+}
+
+export function useFresh<L extends Library | null>(given: L, kinds: readonly Kind[]): L {
+  const latest = useSyncExternalStore(watchLibrary, () => (given ? peekLibrary(given.conifers) : null), () => null);
+  return useSettled((latest ?? given) as L, kinds);
+}
+
 
 export function useSettled<L extends Library | null>(library: L, kinds: readonly Kind[]): L {
   const key = kinds.map((kind) => (library?.full.has(kind) ? 'full' : library?.kinds.has(kind) ? 'far' : 'none')).join(' ');
