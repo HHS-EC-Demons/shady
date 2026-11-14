@@ -321,12 +321,132 @@
    "bytes": 73590
   },
   {
+   "name": "bench",
+   "kind": "bench",
+   "source": "https://poly.pizza/m/jLxjFxFRpw",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 376,
+    "lod1": 107
+   },
+   "bytes": 8864
+  },
+  {
+   "name": "play-slide",
+   "kind": "playground",
+   "source": "https://poly.pizza/m/dDe3njWPbg0",
+   "author": "Poly by Google",
+   "licence": "CC BY 3.0",
+   "triangles": {
+    "lod0": 695,
+    "lod1": 112
+   },
+   "bytes": 16752
+  },
+  {
+   "name": "play-swings",
+   "kind": "playground",
+   "source": "https://poly.pizza/m/e-IJdcqZH4p",
+   "author": "Poly by Google",
+   "licence": "CC BY 3.0",
+   "triangles": {
+    "lod0": 588,
+    "lod1": 92
+   },
+   "bytes": 9320
+  },
+  {
+   "name": "play-climber",
+   "kind": "playground",
+   "source": "https://poly.pizza/m/0-7U_RTHzKT",
+   "author": "Poly by Google",
+   "licence": "CC BY 3.0",
+   "triangles": {
+    "lod0": 1341,
+    "lod1": 56
+   },
+   "bytes": 28748
+  },
+  {
+   "name": "play-monkeybars",
+   "kind": "playground",
+   "source": "https://poly.pizza/m/a1zyPAuesMV",
+   "author": "sirkitree",
+   "licence": "CC BY 3.0",
+   "triangles": {
+    "lod0": 537,
+    "lod1": 103
+   },
+   "bytes": 10684
+  },
+  {
+   "name": "play-seesaw",
+   "kind": "playground",
+   "source": "https://poly.pizza/m/fUdp1FVq6QE",
+   "author": "Poly by Google",
+   "licence": "CC BY 3.0",
+   "triangles": {
+    "lod0": 1470,
+    "lod1": 100
+   },
+   "bytes": 24032
+  },
+  {
+   "name": "bike-rack",
+   "kind": "bike rack",
+   "source": "https://poly.pizza/m/DzsJ2LPVKZ",
+   "author": "J-Toastie",
+   "licence": "CC BY 3.0",
+   "triangles": {
+    "lod0": 588,
+    "lod1": 110
+   },
+   "bytes": 14056
+  },
+  {
+   "name": "lamp-walkway",
+   "kind": "walkway lamp",
+   "source": "https://poly.pizza/m/vPFSLYh6sg",
+   "author": "Kay Lousberg",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 176,
+    "lod1": 112
+   },
+   "bytes": 9932
+  },
+  {
+   "name": "tex/leaves-far-256-55b19f29.webp",
+   "kind": "texture",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck",
+   "licence": "MIT",
+   "bytes": 14456
+  },
+  {
+   "name": "tex/leaves-far-256-dee46068.webp",
+   "kind": "texture",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck",
+   "licence": "MIT",
+   "bytes": 15918
+  },
+  {
+   "name": "tex/leaves-far-256-dfe32ec4.webp",
+   "kind": "texture",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck",
+   "licence": "MIT",
+   "bytes": 15276
+  },
+  {
    "name": "far",
    "kind": "far levels",
    "source": "pipeline/models_far.mjs",
    "author": "made here from the models above",
    "licence": "each model keeps its own licence above",
-   "bytes": 115924
+   "bytes": 88900
   }
  ]
 }
