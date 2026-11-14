@@ -1,7 +1,7 @@
 import { Edges, Line, OrbitControls } from '@react-three/drei';
 import { useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { animate } from 'motion/react';
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type RefObject } from 'react';
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { OrbitControls as OrbitControlsImpl } from 'three-stdlib';
@@ -13,8 +13,11 @@ import { probeHeight, sunReach, treeHeight, treeRadius, type PlanTree, type Yard
 import { Ground, primeGround } from './ground';
 import { BLOB_LIFT, buildBlob, buildBlock, buildCone, buildRoofUnits, buildSail, buildTree, enhanceWalls, treeTint, type BlockLook, type BlockModel } from './models';
 import { buildStructures } from './covers';
-import { Props, primeProps } from './props';
-import { TIERS, type PropLevel } from './quality';
+import { Crowd, SHADOW_LAYER, type Member } from './crowd';
+import { TREE_SHAPES, chooseTree, mix, modelled, spotHash, type TreeShape } from './forest';
+import { peekLibrary, watchLibrary, type Library } from './library';
+import { Props, primeProps, propKinds } from './props';
+import { TIERS, type Levels, type PropLevel } from './quality';
 import { Prime, Stages, keep, take } from './stages';
 
 const INK = '#12261c';
@@ -247,13 +250,120 @@ export function shownTrees(campus: Campus, most: number): Tree[] {
     .map((item) => item.tree);
 }
 
-export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true }: { yard: Yard; most?: number; grounded?: boolean }) {
+export const TREE_REFERENCE = 10;
+const QUIET_LEAVES = new THREE.Color(1.05, 0.98, 1.02);
+const scratch = { at: new THREE.Vector3(), turn: new THREE.Quaternion(), size: new THREE.Vector3(), choice: { model: '', wide: 1, tall: 1, turn: 0 }, sized: { radius: 1, height: 1, needle: false } };
+const shelves = new WeakMap<Library, TreeShape[]>();
+
+export function shapesIn(library: Library): TreeShape[] {
+  let shapes = shelves.get(library);
+  if (!shapes) {
+    shapes = TREE_SHAPES.filter((shape) => library.models.has(shape.name));
+    shelves.set(library, shapes);
+  }
+  return shapes;
+}
+
+export function broadIn(library: Library): string[] {
+  return shapesIn(library)
+    .filter((shape) => shape.kind !== 'conifer')
+    .map((shape) => shape.name);
+}
+
+export function treeMember(library: Library, tree: { radius: number; height: number; needle?: boolean }, key: number, x: number, z: number, tint: THREE.Color | null, grow = 1, pop = 1, out?: Member): Member {
+  const sized = scratch.sized;
+  sized.radius = Math.max(1e-3, tree.radius * grow);
+  sized.height = Math.max(1e-3, tree.height * grow);
+  sized.needle = tree.needle === true;
+  const choice = chooseTree(sized, key, shapesIn(library), scratch.choice);
+  const scale = Math.max(1e-4, pop);
+  scratch.at.set(x, 0, z);
+  scratch.turn.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, choice.turn);
+  scratch.size.set(choice.wide * scale, choice.tall * scale, choice.wide * scale);
+  const member = out ?? { model: choice.model, matrix: new THREE.Matrix4(), tint: null, size: 1 };
+  member.model = choice.model;
+  member.matrix.compose(scratch.at, scratch.turn, scratch.size);
+  member.tint = tint;
+  member.size = Math.max(0.1, tree.height * grow * scale);
+  member.hidden = grow * pop <= 1e-3;
+  return member;
+}
+
+export function plantKey(id: number): number {
+  return mix(id, 0, 17);
+}
+
+type MappedProps = { yard: Yard; most?: number; grounded?: boolean; library?: Library | null; levels?: Levels };
+
+export function useLibrary(conifers: boolean): Library | null {
+  return useSyncExternalStore(watchLibrary, () => peekLibrary(conifers), () => null);
+}
+
+export function useMulti(): boolean {
+  return useThree((state) => state.gl.extensions.has('WEBGL_multi_draw'));
+}
+
+export function drawable(library: Library | null, tree: { needle?: boolean }): boolean {
+  return library !== null && modelled(library.kinds, tree);
+}
+
+export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true, library = null, levels = TIERS.high.levels }: MappedProps) {
+  const trees = useMemo(() => shownTrees(yard.campus, most), [yard.campus, most]);
+  const real = useMemo(() => trees.filter((tree) => drawable(library, tree)), [trees, library]);
+  const plain = useMemo(() => trees.filter((tree) => !drawable(library, tree)), [trees, library]);
+  return (
+    <>
+      {library && real.length > 0 && <ModelTrees yard={yard} trees={real} grounded={grounded} library={library} levels={levels} />}
+      {plain.length > 0 && <PlainTrees yard={yard} trees={plain} grounded={grounded} />}
+    </>
+  );
+}
+
+function ModelTrees({ yard, trees, grounded, library, levels }: { yard: Yard; trees: Tree[]; grounded: boolean; library: Library; levels: Levels }) {
+  const blob = useBlob();
+  const blobs = useRef<THREE.InstancedMesh>(null);
+  const multi = useMulti();
+  const crowd = useMemo(() => {
+    const members = trees.map((tree) => {
+      const key = spotHash(tree.x, tree.y);
+      const [x, , z] = yard.toScene(tree.x, tree.y);
+      return treeMember(library, tree, key, x, z, treeTint(key).multiply(QUIET_LEAVES));
+    });
+    return new Crowd(library, members, { edges: levels.trees, reference: TREE_REFERENCE, floor: levels.floor, bulk: multi ? 2 : 0 });
+  }, [library, trees, yard, levels, multi]);
+  useEffect(() => () => crowd.dispose(), [crowd]);
+  useFrame((state) => {
+    crowd.update(state.camera, state.gl.domElement.height);
+  });
+  useEffect(() => {
+    const mesh = blobs.current;
+    if (!mesh) return;
+    const matrix = new THREE.Matrix4();
+    const flat = new THREE.Quaternion();
+    trees.forEach((tree, index) => {
+      const [x, , z] = yard.toScene(tree.x, tree.y);
+      const spread = blobSize(tree.radius);
+      matrix.compose(new THREE.Vector3(x, BLOB_LIFT, z), flat, new THREE.Vector3(spread, 1, spread));
+      mesh.setMatrixAt(index, matrix);
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    mesh.computeBoundingSphere();
+  }, [trees, yard, blob, grounded]);
+  if (trees.length === 0) return null;
+  return (
+    <group name="trees">
+      <primitive object={crowd.object} />
+      {grounded && <instancedMesh ref={blobs} name="blobs" args={[blob.geometry, blob.material, trees.length]} renderOrder={-1} raycast={() => null} />}
+    </group>
+  );
+}
+
+function PlainTrees({ yard, trees, grounded }: { yard: Yard; trees: Tree[]; grounded: boolean }) {
   const model = useTree(true, true);
   const blob = useBlob();
   const crowns = useRef<THREE.InstancedMesh>(null);
   const trunks = useRef<THREE.InstancedMesh>(null);
   const blobs = useRef<THREE.InstancedMesh>(null);
-  const trees = useMemo(() => shownTrees(yard.campus, most), [yard.campus, most]);
   const needles = useMemo(() => trees.filter((tree) => tree.needle), [trees]);
   const broad = useMemo(() => trees.filter((tree) => !tree.needle), [trees]);
   const cones = useRef<THREE.InstancedMesh>(null);
@@ -327,7 +437,9 @@ export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true 
   );
 }
 
-function PlantedTree({ yard, tree, chosen, model, blob }: { yard: Yard; tree: PlanTree; chosen: boolean; model: TreeModel; blob: Blob }) {
+type Grove = { crowd: Crowd; library: Library } | null;
+
+function PlantedTree({ yard, tree, chosen, model, blob, grove, slot }: { yard: Yard; tree: PlanTree; chosen: boolean; model: TreeModel; blob: Blob; grove: Grove; slot: number }) {
   const controls = useThree((state) => state.controls) as OrbitControlsImpl | null;
   const invalidate = useThree((state) => state.invalidate);
   const mode = useRef<'move' | null>(null);
@@ -337,12 +449,29 @@ function PlantedTree({ yard, tree, chosen, model, blob }: { yard: Yard; tree: Pl
   const thick = girth(tree.radius);
   const spread = blobSize(tree.radius);
   const tint = useMemo(() => `#${treeTint(tree.id).getHexString()}`, [tree.id]);
+  const leaves = useMemo(() => treeTint(tree.id), [tree.id]);
   const body = useRef<THREE.Group>(null);
+  const pop = useRef(0.05);
+  const member = useMemo<Member>(() => ({ model: '', matrix: new THREE.Matrix4(), tint: null, size: 1 }), []);
+  const put = () => {
+    if (!grove) return;
+    treeMember(grove.library, tree, plantKey(tree.id), x, z, leaves, 1, pop.current, member);
+    grove.crowd.set(slot, member);
+  };
+  const latest = useRef(put);
+  latest.current = put;
+  useLayoutEffect(() => {
+    latest.current();
+    invalidate();
+  }, [grove, slot, x, z, tree.radius, tree.height, invalidate]);
   useEffect(() => {
     const group = body.current;
     if (!group) return;
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       group.scale.setScalar(1);
+      pop.current = 1;
+      latest.current();
+      invalidate();
       return;
     }
     const grow = animate(0.05, 1, {
@@ -351,6 +480,8 @@ function PlantedTree({ yard, tree, chosen, model, blob }: { yard: Yard; tree: Pl
       damping: 17,
       onUpdate: (value) => {
         group.scale.setScalar(value);
+        pop.current = value;
+        latest.current();
         invalidate();
       },
     });
@@ -392,26 +523,26 @@ function PlantedTree({ yard, tree, chosen, model, blob }: { yard: Yard; tree: Pl
         position-y={trunk / 2}
         scale={[thick, trunk, thick]}
         rotation-y={tree.id * 1.7}
-        castShadow
+        castShadow={!grove}
         onPointerDown={begin('move')}
         onPointerMove={move}
         onPointerUp={end}
       >
-        <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
+        {grove ? <meshBasicMaterial visible={false} /> : <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />}
       </mesh>
       <mesh
         geometry={model.crown}
         position-y={tree.height - tall}
         scale={[tree.radius, tall, tree.radius]}
         rotation-y={tree.id * 1.7}
-        castShadow
+        castShadow={!grove}
         onPointerDown={begin('move')}
         onPointerMove={move}
         onPointerUp={end}
         onPointerOver={() => (document.body.style.cursor = 'grab')}
         onPointerOut={() => (document.body.style.cursor = '')}
       >
-        <meshStandardMaterial vertexColors color={tint} roughness={1} />
+        {grove ? <meshBasicMaterial visible={false} /> : <meshStandardMaterial vertexColors color={tint} roughness={1} />}
       </mesh>
       <mesh geometry={blob.geometry} material={blob.material} position-y={BLOB_LIFT} scale={[spread, 1, spread]} renderOrder={-1} raycast={() => null} />
       </group>
@@ -461,7 +592,45 @@ function SailMesh({ yard, sail, chosen }: { yard: Yard; sail: Sail; chosen: bool
   );
 }
 
-function Plan({ yard }: { yard: Yard }) {
+const GHOST_OK = '#5d8f6c';
+const GHOST_NO = '#6d7f78';
+
+function ghostMaterials(library: Library, ok: boolean): Map<string, THREE.Material> {
+  const result = new Map<string, THREE.Material>();
+  for (const look of library.looks.values()) {
+    const material = new THREE.MeshBasicMaterial({ color: ok ? GHOST_OK : GHOST_NO, transparent: true, opacity: ok ? 0.55 : 0.25, depthWrite: false, side: look.double ? THREE.DoubleSide : THREE.FrontSide });
+    if (look.cutoff > 0 && look.map) {
+      material.alphaMap = null;
+      material.map = look.map;
+      material.alphaTest = look.cutoff;
+    }
+    result.set(look.key, material);
+  }
+  return result;
+}
+
+function Ghost({ yard, library, ghost }: { yard: Yard; library: Library; ghost: { x: number; y: number; ok: boolean } }) {
+  const materials = useMemo(() => ({ ok: ghostMaterials(library, true), no: ghostMaterials(library, false) }), [library]);
+  useEffect(
+    () => () => {
+      for (const material of [...materials.ok.values(), ...materials.no.values()]) material.dispose();
+    },
+    [materials],
+  );
+  const choice = chooseTree({ radius: treeRadius(yard.years), height: treeHeight(yard.years) }, plantKey(yard.upcoming()), shapesIn(library));
+  const parts = library.models.get(choice.model)?.levels[1] ?? [];
+  const [x, , z] = yard.toScene(ghost.x, ghost.y);
+  const set = ghost.ok ? materials.ok : materials.no;
+  return (
+    <group position={[x, 0, z]} rotation-y={choice.turn} scale={[choice.wide, choice.tall, choice.wide]}>
+      {parts.map((part) => (
+        <mesh key={part.look} geometry={part.geometry} material={set.get(part.look)} raycast={() => null} />
+      ))}
+    </group>
+  );
+}
+
+function Plan({ yard, library = null, levels = TIERS.high.levels }: { yard: Yard; library?: Library | null; levels?: Levels }) {
   useYard(yard);
   const ghost = yard.ghost;
   const [grown, setGrown] = useState(false);
@@ -475,16 +644,33 @@ function Plan({ yard }: { yard: Yard }) {
     [model],
   );
   const blob = useBlob();
+  const ids = yard.trees.map((tree) => tree.id).join(' ');
+  const multi = useMulti();
+  const leafy = library && library.kinds.has('broadleaf') ? library : null;
+  const grove = useMemo<Grove>(() => {
+    if (!leafy || !grown) return null;
+    const members = yard.trees.map((tree) => {
+      const [x, , z] = yard.toScene(tree.x, tree.y);
+      return treeMember(leafy, tree, plantKey(tree.id), x, z, treeTint(tree.id));
+    });
+    return { library: leafy, crowd: new Crowd(leafy, members, { edges: levels.trees, reference: TREE_REFERENCE, floor: levels.floor, bulk: multi ? 2 : 0, candidates: broadIn(leafy) }) };
+  }, [leafy, grown, ids, levels, yard, multi]);
+  useEffect(() => () => grove?.crowd.dispose(), [grove]);
+  useFrame((state) => {
+    grove?.crowd.update(state.camera, state.gl.domElement.height);
+  });
   return (
     <group>
+      {grove && <primitive object={grove.crowd.object} />}
       {model &&
-        yard.trees.map((tree) => (
-          <PlantedTree key={tree.id} yard={yard} tree={tree} chosen={yard.selected === tree.id} model={model} blob={blob} />
+        yard.trees.map((tree, slot) => (
+          <PlantedTree key={tree.id} yard={yard} tree={tree} chosen={yard.selected === tree.id} model={model} blob={blob} grove={grove} slot={slot} />
         ))}
       {yard.sails.map((sail) => (
         <SailMesh key={sail.id} yard={yard} sail={sail} chosen={yard.selected === sail.id} />
       ))}
-      {model && ghost && yard.tool === 'tree' && !yard.busy && (
+      {leafy && ghost && yard.tool === 'tree' && !yard.busy && <Ghost yard={yard} library={leafy} ghost={ghost} />}
+      {!leafy && model && ghost && yard.tool === 'tree' && !yard.busy && (
         <mesh
           geometry={model.crown}
           position={[yard.toScene(ghost.x, ghost.y)[0], treeHeight(yard.years) - treeRadius(yard.years) * CANOPY_FLATTEN, yard.toScene(ghost.x, ghost.y)[2]]}
@@ -528,6 +714,7 @@ export function Sun({ yard, reach, locked = false, shadow = TIERS.high.shadow }:
   useEffect(() => {
     const lamp = light.current;
     if (!lamp) return;
+    lamp.shadow.camera.layers.enable(SHADOW_LAYER);
     scene.add(lamp.target);
     return () => {
       scene.remove(lamp.target);
@@ -874,9 +1061,9 @@ export function Pulse({ yard }: { yard: Yard }) {
   return null;
 }
 
-type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel; standing?: number; grain?: boolean; onReady: () => void };
+type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel; standing?: number; grain?: boolean; library?: Library | null; levels?: Levels; onReady: () => void };
 
-export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS.high.texture, props = TIERS.high.props, standing = TIERS.high.standing, grain = TIERS.high.grain, onReady }: SceneProps) {
+export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS.high.texture, props = TIERS.high.props, standing = TIERS.high.standing, grain = TIERS.high.grain, library = null, levels = TIERS.high.levels, onReady }: SceneProps) {
   const reach = sunReach(yard);
   return (
     <Stages onReady={onReady}>
@@ -887,10 +1074,10 @@ export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS
       <Ground yard={yard} texture={texture} grain={grain} />
       <Prime run={() => primeBlocks(yard)} />
       <Blocks yard={yard} />
-      <MappedTrees yard={yard} most={standing} grounded={props !== null && !props.light} />
-      <Prime run={() => primeProps(yard, props)} />
-      <Props yard={yard} level={props} />
-      <Plan yard={yard} />
+      <MappedTrees yard={yard} most={standing} grounded={props !== null && !props.light} library={library} levels={levels} />
+      <Prime run={() => primeProps(yard, props, propKinds(library))} />
+      <Props yard={yard} level={props} library={library} levels={levels} />
+      <Plan yard={yard} library={library} levels={levels} />
       <Sun yard={yard} reach={reach} shadow={shadow} />
       <ProbeMark yard={yard} />
       <Rig yard={yard} reach={reach} />

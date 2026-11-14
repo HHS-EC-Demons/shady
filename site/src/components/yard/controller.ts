@@ -299,6 +299,10 @@ export class Yard {
     this.emit();
   }
 
+  upcoming(): number {
+    return this.nextId;
+  }
+
   standing(x: number, y: number): boolean {
     return treeAt(this.campus.trees, x, y) >= 0 || treeAt(this.gone, x, y) >= 0;
   }
