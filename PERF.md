@@ -178,6 +178,65 @@ Blocked files, on the dev build at loads of 127 to 180. One car file blocked kep
 
 With both steps in, the seven beats look as before in Chromium, WebKit and Firefox, and the opening beat at live differs from the same beat after phase two in 0.11 percent of pixels. Scrolling straight to the close beats right after live on the slow network showed far crowns and no hole or flash. Firefox gave 93, 107, 101, 104, 117, 99 and 105 calls on high and 73, 70, 66, 69, 78, 69 and 85 on medium. The Intel chip on medium at the busiest beat took 8.42 ms of GPU time per frame at the median and 10.64 ms at the 99th percentile, at loads of 205 to 271.
 
+### Prepare only what is seen
+
+A runner comparison on 2026-11-14 with Lighthouse, software rendering and the processor slowed 4 times found the first picture fixed but the main thread busier than with the single step, because phase two parsed, converted, uploaded and compiled every kind right after the first picture. Now the full files are only downloaded after the first picture, as bytes at low priority one at a time, and not at all when the browser reports saving data or a 3g or slower link. A kind's nearer levels are prepared only when a model of that kind on screen sits inside its middle level distance, or once the page has been up 6 s after the first picture and the main thread is idle. A whole campus view never needs them. Until then everything draws from its far level.
+
+Profile of the landing page before this change, in Chromium with SwiftShader, the processor slowed 4 times, the slow profile network and an empty cache, from load until the near levels were in, at load 13. Self time, leaving out idle time, 1,787 ms of unattributed native work and 131 ms of garbage collection.
+
+| Cost | Self time |
+| --- | --- |
+| `getProgramInfoLog`, waiting for a shader program to link | 217 ms |
+| Unnamed native code | 206 ms |
+| `floatGeometry` in `library.ts` | 185 ms |
+| `fetch` | 124 ms |
+| `texSubImage2D`, texture uploads | 107 ms |
+| `getProgram` in three.js | 102 ms |
+| `setProgram` in three.js | 98 ms |
+| `shaderSource` | 97 ms |
+| `nextTask` in `stages.tsx` | 95 ms |
+| `replaceLightNums` in three.js, building shader text | 87 ms |
+
+What changed besides the demand rule. Converting a full file now reuses the far level parts from the pack, so that level is neither converted nor uploaded twice. The warm up reads the uniforms of a shader program only once. The scene tree takes a library that changes only when the set of kinds changes, and each crowd listens for its own kinds, so a library notice no longer renders the whole scene again. Building a whole new crowd when a kind arrives, instead of adding its near levels to the crowd on screen, is left as it is because it is the riskier change, and the depth shaders are still compiled before the swap because they would otherwise compile in the middle of a frame.
+
+Runner-like runs on this Mac, three per build, loads 21 falling to 13. Old is the build before the real models. Times are from navigation, totals run to 5 s and to 20 s after the first picture.
+
+| Page left alone | Old | Round 3 | Now |
+| --- | --- | --- | --- |
+| Landing live | 6.90, 8.47, 7.10 s | 8.40, 10.49, 8.59 s | 15.41, 9.77, 8.81 s |
+| Landing blocking time to live plus 5 s | 0.97, 2.08, 1.36 s | 1.14, 3.07, 1.20 s | 6.80, 2.14, 1.35 s |
+| Landing script time to live plus 5 s | 2.26, 3.79, 2.51 s | 2.14, 4.21, 2.33 s | 6.85, 3.45, 2.43 s |
+| Landing blocking and script time to 20 s | as above | 1.44 and 2.83, 3.66 and 4.98, 1.59 and 2.89 s | 8.89 and 7.70, 3.62 and 4.67, 1.59 and 2.75 s |
+| Landing near levels in | at live | 17.4, 19.9, 17.4 s | 28.3, 21.7, 17.9 s |
+| Yard first picture | 8.13, 9.35, 6.92 s | 12.82, 8.75, 7.41 s | 15.72, 13.62, 7.28 s |
+| Yard blocking time to first picture plus 5 s | 2.01, 2.96, 0.85 s | 6.39, 2.41, 0.84 s | 9.00, 6.97, 0.79 s |
+| Yard script time to first picture plus 5 s | 3.16, 4.26, 2.35 s | 6.80, 3.27, 2.19 s | 8.81, 7.48, 2.35 s |
+| Yard blocking and script time to 20 s | as above | 8.11 and 8.06, 3.33 and 4.41, 1.09 and 2.58 s | 10.86 and 10.40, 7.15 and 8.18, 1.04 and 2.92 s |
+| Yard near levels in | at first picture | 25.3, 18.8, 15.5 s | 31.8, 23.8, 16.2 s |
+| Bytes in all, landing and yard | 728 and 645 KB | 2,230 and 2,139 KB | 2,230 and 2,140 KB |
+
+The third run of each, at the lowest load, puts the new build within 1.3 times the old one up to 5 s after the first picture on both pages and level with round 3 over 20 s. The first two runs of the new build were the slowest of their group, including their first picture, which this change does not touch, and the machine was also running another session's builds, so these runs cannot show a gain over round 3 either way. The new build always ran last in its group.
+
+| Interacting, now | Run 1 | Run 2 |
+| --- | --- | --- |
+| Landing scrolled to the heat beat at live, longest task after live | 632 ms | 1,857 ms |
+| Yard zoomed to about 40 m right after the first picture, longest task after it | 949 ms | 619 ms |
+
+The 200 ms aim for the interacting runs is not met. In a profile of the zoom the worst task was one `getProgramInfoLog` call in the warm up that waited 17 s for the software graphics process, which was still drawing the zoomed frames, and round 3 had the same pattern with 17.4 s.
+
+Lighthouse 13 run on this Mac the way `checks/perf.yml` runs it, one run each, loads 9 to 27. Its simulated slowdown on a busy machine gives much larger numbers than the GitHub runner, so only the order within a row says anything.
+
+| Lighthouse | Old | Round 3 | Now |
+| --- | --- | --- | --- |
+| Landing blocking time | 24.6 s | 21.2 s | 7.0 s |
+| Landing script time | 23.7 s | 23.7 s | 9.3 s |
+| Landing longest task | 6.2 s | 10.0 s | 3.9 s |
+| Yard first big paint | 6.3 s | 11.0 s | 8.9 s |
+| Yard blocking time | 35.9 s | 44.7 s | 36.9 s |
+| Yard script time | 37.4 s | 52.3 s | 39.1 s |
+
+With one car file blocked on the dev build the cars stayed at their far level while broadleaf trees, poles and people went full once the page was idle, and no app error was logged.
+
 ## Scroll test
 
 `checks/scroll-perf.js` scrolls the whole film at a steady 700 px a second and records every frame time. Run it from the project root with `playwright-cli -s=perf run-code --filename=checks/scroll-perf.js` while the dev server is on port 4392 and nothing else is using the machine.
