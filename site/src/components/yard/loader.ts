@@ -1,7 +1,11 @@
+import { covered } from '@/engine/aerial';
 import { mapped, outdated, type Campus } from '@/engine/campus';
+import { skipPhotos, type Link } from '@/engine/district';
 import { fresh, placeKey } from '@/engine/memory';
 import { loadCampus, type Found } from '@/engine/osm';
 import { pause } from '@/engine/race';
+import { askRoofs } from '@/engine/remote';
+import { roofPhotoOf } from '@/engine/roofs';
 import { hottestDay, type Weather } from '@/engine/weather';
 import { recall, remember, touch, type Memory } from './recall';
 import { applyFixes, fixesOf, hasFixes, keptSchool, rebase, type Bundle, type Fixes } from './store';
@@ -19,6 +23,8 @@ const PHOTO_WAIT = 60000;
 const NONE: Fixes = { surfaces: [], heights: [], cut: [] };
 const flights = new Map<string, Flight>();
 const reading = new Map<AbortController, string>();
+const saving = new Map<string, Promise<void>>();
+const tried = new Set<string>();
 
 function slowPhoto(): number {
   if (!import.meta.env.DEV || typeof window === 'undefined') return 0;
@@ -49,6 +55,47 @@ function photo(key: string, campus: Campus): Promise<Campus> {
     .finally(() => reading.delete(control));
   if (SLOW === 0) return asked;
   return Promise.all([asked, pause(SLOW)]).then(([value]) => ({ ...value, trees: [...value.trees] }));
+}
+
+function save(key: string, task: () => Promise<void>): Promise<void> {
+  const next = (saving.get(key) ?? Promise.resolve()).then(task, task);
+  saving.set(key, next);
+  return next;
+}
+
+export function roofsAllowed(link: Link | undefined, coarse: boolean): boolean {
+  return !skipPhotos(link, coarse);
+}
+
+function roofsHere(): boolean {
+  if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+  return roofsAllowed((navigator as Navigator & { connection?: Link }).connection, window.matchMedia('(pointer: coarse)').matches);
+}
+
+export function roofless(campus: Campus): boolean {
+  return covered(campus.center) && !roofPhotoOf(campus);
+}
+
+export async function roofsFor(found: Found, campus: Campus): Promise<Campus | null> {
+  const key = placeKey(found);
+  if (!roofless(campus) || !mapped(campus) || tried.has(key) || !roofsHere()) return null;
+  tried.add(key);
+  const control = new AbortController();
+  reading.set(control, key);
+  try {
+    const roofs = await askRoofs(campus, control.signal);
+    if (control.signal.aborted) tried.delete(key);
+    if (!roofs || control.signal.aborted) return null;
+    await save(key, async () => {
+      const memory = await recall(found);
+      if (memory && !outdated(memory.campus) && !roofPhotoOf(memory.campus) && memory.campus.blocks.length === campus.blocks.length) await remember({ ...memory, campus: { ...memory.campus, roofs } });
+    });
+    return { ...campus, roofs };
+  } catch {
+    return null;
+  } finally {
+    reading.delete(control);
+  }
 }
 
 export function usable(memory: Memory, now: number): boolean {
@@ -97,9 +144,11 @@ export async function ownHottest(found: Found): Promise<Weather> {
   return weather;
 }
 
-async function keepLate(found: Found, campus: Campus, weather: Weather | null, at?: number): Promise<void> {
-  const memory = await recall(found);
-  await remember({ found, campus, weather: memory?.weather ?? weather, enriched: true, fixes: memory?.fixes ?? NONE, at: memory?.at ?? at });
+function keepLate(found: Found, campus: Campus, weather: Weather | null, at?: number): Promise<void> {
+  return save(placeKey(found), async () => {
+    const memory = await recall(found);
+    await remember({ found, campus, weather: memory?.weather ?? weather, enriched: true, fixes: memory?.fixes ?? NONE, at: memory?.at ?? at });
+  });
 }
 
 function lateFrom(found: Found, asked: Promise<Campus>, before: Campus, weather: Weather | null, at?: number): Promise<Campus | null> {
@@ -175,7 +224,7 @@ async function arrive(found: Found, say: (stage: Stage) => void, day?: Weather):
   const early = await Promise.race([asked, pause(Math.max(0, HOLD - (Date.now() - started))).then(() => null)]);
   const shown = early ?? campus;
   const fixes = fixesOn(mine, shown);
-  void remember({ found, campus: shown, weather, enriched: early !== null && early !== campus, fixes });
+  void save(key, () => remember({ found, campus: shown, weather, enriched: early !== null && early !== campus, fixes }));
   const late = early !== null ? Promise.resolve(null) : lateFrom(found, asked, campus, weather);
   return { bundle: onDay(bundleOf(found, shown, weather, fixes), day, weather), pristine: shown, late, cached: false };
 }

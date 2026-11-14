@@ -1,4 +1,4 @@
-import { campusMiddle, type Campus, type Ground } from './campus';
+import { campusMiddle, type Campus, type Ground, type RoofPhoto } from './campus';
 import { contactOf, type Contact } from './contact';
 import { roofOf, type RoofUnit } from './roof';
 import { openCampus, simulate, type Backdrop, type HeatDay, type Opened } from './heat';
@@ -13,6 +13,7 @@ export type Ask =
   | { id: number; kind: 'simulate'; key: number; added: Obstacles }
   | { id: number; kind: 'close'; key: number }
   | { id: number; kind: 'sight'; campus: Campus }
+  | { id: number; kind: 'roofs'; campus: Campus }
   | { id: number; kind: 'cancel'; target: number };
 
 export type Answer =
@@ -34,6 +35,7 @@ export type Answer =
     }
   | { id: number; kind: 'day'; temps: Uint8Array; light: Uint8Array; air: Float32Array }
   | { id: number; kind: 'sight'; sight: Sight | null }
+  | { id: number; kind: 'roofs'; roofs: RoofPhoto | null }
   | { id: number; kind: 'ready' }
   | { id: number; kind: 'gone' }
   | { id: number; kind: 'failed'; reason: string };
@@ -100,14 +102,14 @@ function send(index: number, make: (id: number) => Ask): Promise<Answer | null> 
   });
 }
 
-export function askSight(campus: Campus, signal: AbortSignal): Promise<Sight | null | undefined> {
+function askLate(kind: 'sight' | 'roofs', campus: Campus, signal: AbortSignal): Promise<Answer | null | undefined> {
   const index = LANES - 1;
   const lane = laneAt(index);
   if (!lane) return Promise.resolve(undefined);
   let asked = 0;
   const answer = send(index, (id) => {
     asked = id;
-    return { id, kind: 'sight', campus };
+    return { id, kind, campus };
   });
   const cancel = () => {
     try {
@@ -119,8 +121,16 @@ export function askSight(campus: Campus, signal: AbortSignal): Promise<Sight | n
   signal.addEventListener('abort', cancel, { once: true });
   return answer.then((reply) => {
     signal.removeEventListener('abort', cancel);
-    return reply && reply.kind === 'sight' ? reply.sight : undefined;
+    return reply;
   });
+}
+
+export function askSight(campus: Campus, signal: AbortSignal): Promise<Sight | null | undefined> {
+  return askLate('sight', campus, signal).then((reply) => (reply && reply.kind === 'sight' ? reply.sight : undefined));
+}
+
+export function askRoofs(campus: Campus, signal: AbortSignal): Promise<RoofPhoto | null> {
+  return askLate('roofs', campus, signal).then((reply) => (reply && reply.kind === 'roofs' ? reply.roofs : null));
 }
 
 export class Bench {

@@ -4,6 +4,7 @@ import { fileURLToPath } from 'node:url';
 import { enrich } from '../site/src/engine/aerial';
 import { loadCampus, type Found } from '../site/src/engine/osm';
 import { hottestDay, type Weather } from '../site/src/engine/weather';
+import { bakeRoofs } from './roofs';
 
 const school: Found = {
   kind: 'way',
@@ -33,7 +34,8 @@ try {
   weather = (JSON.parse(readFileSync(file, 'utf8')) as { weather: Weather }).weather;
   console.error(`Kept the saved weather day. ${String(error)}`);
 }
-writeFileSync(join(out, 'heritage.json'), JSON.stringify({ campus, weather }));
+const roofs = await bakeRoofs(campus, out, 'heritage');
+writeFileSync(join(out, 'heritage.json'), JSON.stringify({ campus: { ...campus, roofs }, weather }));
 
 const kinds: Record<string, number> = {};
 for (const patch of campus.patches) kinds[patch.surface] = (kinds[patch.surface] ?? 0) + 1;

@@ -135,7 +135,7 @@ function sample(sampler: Sampler, east: number, north: number, out: Uint8Array):
 
 type Counter = { bytes: number };
 
-async function openSampler(item: Item, center: { lat: number; lon: number }, box: Box, counter: Counter, signal?: AbortSignal): Promise<Sampler | null> {
+async function openSampler(item: Item, center: { lat: number; lon: number }, box: Box, counter: Counter, signal?: AbortSignal, aim = AIM, parts?: Box[]): Promise<Sampler | null> {
   const zone = zoneOf(item.epsg);
   if (!zone) return null;
   const { fromCustomClient, BaseClient, BaseResponse } = await import('geotiff');
@@ -165,7 +165,7 @@ async function openSampler(item: Item, center: { lat: number; lon: number }, box
   const [originX, originY] = base.getOrigin();
   const [baseRes] = base.getResolution();
   let wanted = 0;
-  while (baseRes * 2 ** (wanted + 1) <= AIM) wanted += 1;
+  while (baseRes * 2 ** (wanted + 1) <= aim) wanted += 1;
   let image = base;
   for (let level = wanted; level > 0; level -= 1) {
     try {
@@ -176,41 +176,72 @@ async function openSampler(item: Item, center: { lat: number; lon: number }, box
     }
   }
   const res = (baseRes * base.getWidth()) / image.getWidth();
-  let minE = Infinity;
-  let maxE = -Infinity;
-  let minN = Infinity;
-  let maxN = -Infinity;
-  for (const [x, y] of [
-    [box.minX, box.minY],
-    [box.maxX, box.minY],
-    [box.minX, box.maxY],
-    [box.maxX, box.maxY],
-  ]) {
-    const { lat, lon } = unproject(center, x, y);
-    const [east, north] = toUtm(lat, lon, zone);
-    minE = Math.min(minE, east);
-    maxE = Math.max(maxE, east);
-    minN = Math.min(minN, north);
-    maxN = Math.max(maxN, north);
-  }
-  const left = Math.max(0, Math.floor((minE - originX) / res) - 2);
-  const top = Math.max(0, Math.floor((originY - maxN) / res) - 2);
-  const right = Math.min(image.getWidth(), Math.ceil((maxE - originX) / res) + 2);
-  const bottom = Math.min(image.getHeight(), Math.ceil((originY - minN) / res) + 2);
+  const pixels = (area: Box): [number, number, number, number] => {
+    let minE = Infinity;
+    let maxE = -Infinity;
+    let minN = Infinity;
+    let maxN = -Infinity;
+    for (const [x, y] of [
+      [area.minX, area.minY],
+      [area.maxX, area.minY],
+      [area.minX, area.maxY],
+      [area.maxX, area.maxY],
+    ]) {
+      const { lat, lon } = unproject(center, x, y);
+      const [east, north] = toUtm(lat, lon, zone);
+      minE = Math.min(minE, east);
+      maxE = Math.max(maxE, east);
+      minN = Math.min(minN, north);
+      maxN = Math.max(maxN, north);
+    }
+    return [
+      Math.max(0, Math.floor((minE - originX) / res) - 2),
+      Math.max(0, Math.floor((originY - maxN) / res) - 2),
+      Math.min(image.getWidth(), Math.ceil((maxE - originX) / res) + 2),
+      Math.min(image.getHeight(), Math.ceil((originY - minN) / res) + 2),
+    ];
+  };
+  const [left, top, right, bottom] = pixels(box);
   if (right - left < 2 || bottom - top < 2) return null;
-  const raster = await image.readRasters({ window: [left, top, right, bottom], interleave: true, signal });
-  const data = raster instanceof Uint8Array ? raster : Uint8Array.from(raster as ArrayLike<number>);
-  if (image.getSamplesPerPixel() < 4 || data.length !== (right - left) * (bottom - top) * 4) return null;
-  return { zone, originX, originY, res, left, top, width: right - left, height: bottom - top, data };
+  if (image.getSamplesPerPixel() < 4) return null;
+  const width = right - left;
+  const height = bottom - top;
+  let windows: [number, number, number, number][] = [[left, top, right, bottom]];
+  if (parts && parts.length > 0) {
+    const tileWidth = image.getTileWidth();
+    const tileHeight = image.getTileHeight();
+    const wanted = new Set<number>();
+    const across = Math.ceil(image.getWidth() / tileWidth);
+    for (const part of parts) {
+      const [a, b, c, d] = pixels(part);
+      for (let row = Math.floor(Math.max(b, top) / tileHeight); row <= Math.floor((Math.min(d, bottom) - 1) / tileHeight); row += 1) {
+        for (let col = Math.floor(Math.max(a, left) / tileWidth); col <= Math.floor((Math.min(c, right) - 1) / tileWidth); col += 1) wanted.add(row * across + col);
+      }
+    }
+    windows = [...wanted].map((tile) => {
+      const row = Math.floor(tile / across);
+      const col = tile - row * across;
+      return [Math.max(left, col * tileWidth), Math.max(top, row * tileHeight), Math.min(right, (col + 1) * tileWidth), Math.min(bottom, (row + 1) * tileHeight)] as [number, number, number, number];
+    });
+  }
+  const data = new Uint8Array(width * height * 4);
+  for (const [a, b, c, d] of windows) {
+    if (c - a < 1 || d - b < 1) continue;
+    const raster = await image.readRasters({ window: [a, b, c, d], interleave: true, signal });
+    const part = raster instanceof Uint8Array ? raster : Uint8Array.from(raster as ArrayLike<number>);
+    if (part.length !== (c - a) * (d - b) * 4) return null;
+    for (let row = 0; row < d - b; row += 1) data.set(part.subarray(row * (c - a) * 4, (row + 1) * (c - a) * 4), ((b - top + row) * width + (a - left)) * 4);
+  }
+  return { zone, originX, originY, res, left, top, width, height, data };
 }
 
-export async function readPhoto(center: { lat: number; lon: number }, box: Box, signal?: AbortSignal, cell = 1): Promise<Photo | null> {
+export async function readPhoto(center: { lat: number; lon: number }, box: Box, signal?: AbortSignal, cell = 1, aim = AIM, parts?: Box[]): Promise<Photo | null> {
   const started = performance.now();
   const corners = [unproject(center, box.minX, box.minY), unproject(center, box.maxX, box.maxY)];
   const items = await searchItems(corners[0].lon, corners[0].lat, corners[1].lon, corners[1].lat, signal);
   if (items.length === 0) return null;
   const counter: Counter = { bytes: 0 };
-  const opened = await Promise.all(items.map(async (item) => ({ item, sampler: await openSampler(item, center, box, counter, signal) })));
+  const opened = await Promise.all(items.map(async (item) => ({ item, sampler: await openSampler(item, center, box, counter, signal, aim, parts) })));
   const used = opened.filter((entry) => entry.sampler !== null).map((entry) => entry.item);
   const samplers = opened.map((entry) => entry.sampler).filter((sampler): sampler is Sampler => sampler !== null);
   if (samplers.length === 0) return null;

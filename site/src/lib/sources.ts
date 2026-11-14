@@ -36,6 +36,7 @@ export const rows: Source[] = [
 export const models: Source[] = [
   { what: 'Tree models', value: 'ez-tree, MIT', source: 'Daniel Greenheck', url: 'https://github.com/dgreenheck/ez-tree' },
   { what: 'Bark on the tree models', value: 'Bark012 and Bark014, CC0', source: 'ambientCG', url: 'https://ambientcg.com/view?id=Bark012' },
+  { what: 'Brick on the building walls', value: 'Bricks 101, CC0', source: 'ambientCG', url: 'https://ambientcg.com/view?id=Bricks101' },
   { what: 'Car and people models', value: 'CC0', source: 'Quaternius through Poly Pizza', url: 'https://poly.pizza/m/Cz6yDaUcM9' },
   { what: 'Van model', value: 'Generic Van, CC BY 3.0', source: 'PuKkBuMXDD through Poly Pizza', url: 'https://poly.pizza/m/BbRojf2v3H' },
   { what: 'Parking lot light model', value: 'Street Light, CC BY 3.0', source: 'Warren Reid through Poly Pizza', url: 'https://poly.pizza/m/a7GJySoqzuL' },
