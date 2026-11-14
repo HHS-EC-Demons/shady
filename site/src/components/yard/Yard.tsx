@@ -27,7 +27,7 @@ import { clockLabel } from '@/engine/sun';
 import { FIRST_DAY, dayWeather, lastDay, localDay, minuteNow, todayWeather, type Weather } from '@/engine/weather';
 import { canDraw } from '@/lib/utils';
 import { SQUARE_FEET, YEARS, Yard, probeHeight, sunReach, type Cut, type Saved, type Tool } from './controller';
-import { NoWeather, Unmapped, ownHottest, picked, placeBundle, stopPhotos, type Shown, type Stage } from './loader';
+import { NoWeather, Unmapped, ownHottest, picked, placeBundle, roofless, roofsFor, stopPhotos, type Shown, type Stage } from './loader';
 import { quality } from './quality';
 import { rememberFixes } from './recall';
 import { SchoolPicker } from './SchoolPicker';
@@ -709,7 +709,7 @@ export default function YardStage({ base }: { base: string }) {
       .catch(() => setFailed(true));
   };
 
-  const refresh = (found: Found, campus: Campus) => {
+  const refresh = async (found: Found, campus: Campus) => {
     const current = bundle.current;
     const shown = kept ? kept.yard : null;
     if (!current || !shown || !current.school || current.school.kind !== found.kind || current.school.id !== found.id) return;
@@ -717,7 +717,12 @@ export default function YardStage({ base }: { base: string }) {
     const minute = aim.current ?? shown.minute;
     aim.current = null;
     keepSchool(next);
-    void show(next, shown.weather !== next.weather ? shown.weather : undefined, minute, undefined, shown.saved(), shown.tool);
+    await show(next, shown.weather !== next.weather ? shown.weather : undefined, minute, undefined, shown.saved(), shown.tool);
+  };
+
+  const roofsLater = async (found: Found, campus: Campus) => {
+    const done = await roofsFor(found, campus);
+    if (done) await refresh(found, done);
   };
 
   const renew = async (found: Found, campus: Campus, shown: Promise<void>) => {
@@ -726,9 +731,10 @@ export default function YardStage({ base }: { base: string }) {
     try {
       await shown;
       const arrival = await asked;
-      if (newer(arrival.pristine, campus)) refresh(found, arrival.pristine);
+      if (newer(arrival.pristine, campus)) void refresh(found, arrival.pristine);
       const late = await arrival.late;
-      if (late) refresh(found, late);
+      if (late) await refresh(found, late);
+      await roofsLater(found, late ?? arrival.pristine);
     } catch {
       return;
     }
@@ -741,6 +747,7 @@ export default function YardStage({ base }: { base: string }) {
     try {
       let next: Bundle;
       let late: Promise<Campus | null> | null = null;
+      let pristine: Campus | null = null;
       if (found === null) {
         keepSchool(null);
         setStatus('Loading the campus');
@@ -750,6 +757,7 @@ export default function YardStage({ base }: { base: string }) {
         const arrival = await placeBundle(found, (stage) => setStatus(sayStage(stage, found.name)));
         next = arrival.bundle;
         late = arrival.late;
+        pristine = arrival.pristine;
         keepSchool(next);
       }
       setStatus('Heating the ground');
@@ -758,7 +766,13 @@ export default function YardStage({ base }: { base: string }) {
       first.current = true;
       await show(next);
       setPicking(false);
-      if (late && found) void late.then((campus) => campus && refresh(found, campus));
+      if (late && found && pristine) {
+        const start = pristine;
+        void late.then(async (campus) => {
+          if (campus) await refresh(found, campus);
+          await roofsLater(found, campus ?? start);
+        });
+      }
     } catch (error) {
       if (error instanceof Unmapped) {
         setNote('That school has no mapped buildings yet');
@@ -844,7 +858,7 @@ export default function YardStage({ base }: { base: string }) {
         if (found) return;
         setDay(dayOf(file));
         const shown = show(file);
-        if (file.school && behind(file.campus)) void renew(file.school, file.campus, shown);
+        if (file.school && (behind(file.campus) || roofless(file.campus))) void renew(file.school, file.campus, shown);
       })
       .catch(() => live && !found && setFailed(true));
     const unwatch = watchHash();
