@@ -1,10 +1,10 @@
 export type Tier = 'high' | 'medium' | 'low';
 export type PropLevel = { cars: number; people: number; light: boolean; shadows: boolean } | null;
 
-export const TIERS: Record<Tier, { dpr: number; shadow: number; texture: number; props: PropLevel; standing: number }> = {
-  high: { dpr: 1.5, shadow: 3072, texture: 2048, props: { cars: 300, people: 150, light: false, shadows: true }, standing: 600 },
-  medium: { dpr: 1.25, shadow: 2048, texture: 2048, props: { cars: 140, people: 70, light: true, shadows: false }, standing: 250 },
-  low: { dpr: 1, shadow: 1024, texture: 2048, props: null, standing: 150 },
+export const TIERS: Record<Tier, { dpr: number; shadow: number; texture: number; props: PropLevel; standing: number; grain: boolean }> = {
+  high: { dpr: 1.5, shadow: 3072, texture: 2048, props: { cars: 300, people: 150, light: false, shadows: true }, standing: 600, grain: true },
+  medium: { dpr: 1.25, shadow: 2048, texture: 2048, props: { cars: 140, people: 70, light: true, shadows: false }, standing: 250, grain: false },
+  low: { dpr: 1, shadow: 1024, texture: 2048, props: null, standing: 150, grain: false },
 };
 
 const ORDER: Tier[] = ['high', 'medium', 'low'];

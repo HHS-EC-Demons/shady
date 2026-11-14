@@ -649,7 +649,7 @@ export default function FilmScene({ yard, days, story, onFrame, debug }: Props) 
         <Pulse yard={yard} />
         <Prime run={() => yard.readyCells()} />
         <Prime run={(gl) => primeGround(yard, gl)} />
-        <Ground yard={yard} texture={TIERS[tier].texture} inert />
+        <Ground yard={yard} texture={TIERS[tier].texture} grain={TIERS[tier].grain} inert />
         <Prime run={() => primeBlocks(yard)} />
         <Blocks yard={yard} />
         <MappedTrees yard={yard} most={TIERS[tier].standing} grounded={tier === 'high'} />
