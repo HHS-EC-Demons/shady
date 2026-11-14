@@ -40,6 +40,10 @@ export const models: Source[] = [
   { what: 'Car and people models', value: 'CC0', source: 'Quaternius through Poly Pizza', url: 'https://poly.pizza/m/Cz6yDaUcM9' },
   { what: 'Van model', value: 'Generic Van, CC BY 3.0', source: 'PuKkBuMXDD through Poly Pizza', url: 'https://poly.pizza/m/BbRojf2v3H' },
   { what: 'Parking lot light model', value: 'Street Light, CC BY 3.0', source: 'Warren Reid through Poly Pizza', url: 'https://poly.pizza/m/a7GJySoqzuL' },
+  { what: 'Bench and walkway lamp models', value: 'CC0', source: 'Quaternius and Kay Lousberg through Poly Pizza', url: 'https://poly.pizza/m/jLxjFxFRpw' },
+  { what: 'Bike rack model', value: 'Bike Rack, CC BY 3.0', source: 'J-Toastie through Poly Pizza', url: 'https://poly.pizza/m/DzsJ2LPVKZ' },
+  { what: 'Playground models', value: 'Slide, Swing set, Jungle gym and Seesaw, CC BY 3.0', source: 'Poly by Google through Poly Pizza', url: 'https://poly.pizza/m/dDe3njWPbg0' },
+  { what: 'Monkey bars model', value: 'Monkeybars, CC BY 3.0', source: 'sirkitree through Poly Pizza', url: 'https://poly.pizza/m/a1zyPAuesMV' },
 ];
 
 export const rest: Source[] = [
