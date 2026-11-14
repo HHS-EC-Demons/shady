@@ -38,9 +38,25 @@ function sight(ask: Extract<Ask, { kind: 'sight' }>): void {
     });
 }
 
+function roofs(ask: Extract<Ask, { kind: 'roofs' }>): void {
+  const control = new AbortController();
+  looking.set(ask.id, control);
+  import('./roofpass')
+    .then(({ readRoofs }) => readRoofs(ask.campus, control.signal))
+    .catch(() => null)
+    .then((found) => {
+      looking.delete(ask.id);
+      scope.postMessage({ id: ask.id, kind: 'roofs', roofs: control.signal.aborted ? null : found });
+    });
+}
+
 function answer(ask: Ask): void {
   if (ask.kind === 'sight') {
     sight(ask);
+    return;
+  }
+  if (ask.kind === 'roofs') {
+    roofs(ask);
     return;
   }
   if (ask.kind === 'cancel') {
