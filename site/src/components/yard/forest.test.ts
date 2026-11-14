@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Campus } from '@/engine/campus';
 import { YEARS, treeHeight, treeRadius } from '@/engine/growth';
-import { CARS, STRETCH_HIGH, STRETCH_LOW, TREE_SHAPES, chooseCar, choosePerson, chooseTree, levelFor, modelled, reach, spotHash } from './forest';
+import { CARS, STRETCH_HIGH, STRETCH_LOW, TREE_SHAPES, arrived, chooseCar, choosePerson, chooseTree, levelFor, modelled, nearOrder, phaseOf, reach, spotHash } from './forest';
 import { TIERS } from './quality';
 
 const { campus } = JSON.parse(readFileSync(new URL('../../../public/campus/heritage.json', import.meta.url), 'utf8')) as { campus: Campus };
@@ -137,5 +137,42 @@ describe('low tier', () => {
   it('keeps every low distance shorter than medium', () => {
     edges.forEach((edge, index) => expect(edge).toBeLessThan(TIERS.medium.levels.trees[index]));
     expect(TIERS.low.props).toBeNull();
+  });
+});
+
+describe('two phases', () => {
+  it('draws only the far level before the full file arrives', () => {
+    const trees = [null, null, ['crown']];
+    expect(arrived(trees, 0)).toBe(2);
+    expect(arrived(trees, 1)).toBe(2);
+    expect(arrived(trees, 2)).toBe(2);
+    expect(arrived([null, ['body']], 0)).toBe(1);
+  });
+
+  it('keeps the chosen level once every level is in', () => {
+    const trees = [['a'], ['b'], ['c']];
+    [0, 1, 2].forEach((level) => expect(arrived(trees, level)).toBe(level));
+  });
+
+  it('falls back to the nearest level below when farther ones are missing', () => {
+    expect(arrived([['a'], ['b'], null], 2)).toBe(1);
+    expect(arrived([['a'], null, null], 2)).toBe(0);
+    expect(arrived([['a'], ['b'], ['c']], 9)).toBe(2);
+    expect(arrived([null, null, null], 1)).toBe(-1);
+    expect(arrived([], 0)).toBe(-1);
+  });
+
+  it('fetches broadleaf first and conifers only when the campus has them', () => {
+    expect(nearOrder(false)).toEqual(['broadleaf', 'cars', 'poles', 'people']);
+    expect(nearOrder(true)).toEqual(['broadleaf', 'cars', 'poles', 'people', 'conifers']);
+  });
+
+  it('prefers the full set and stands each kind alone', () => {
+    const far = new Set(['broadleaf', 'cars']);
+    const full = new Set(['broadleaf', 'people']);
+    expect(phaseOf(far, full, 'broadleaf')).toBe('full');
+    expect(phaseOf(far, full, 'cars')).toBe('far');
+    expect(phaseOf(far, full, 'people')).toBe('full');
+    expect(phaseOf(far, full, 'poles')).toBe('none');
   });
 });

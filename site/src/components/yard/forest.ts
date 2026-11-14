@@ -140,3 +140,18 @@ export function modelled(kinds: ReadonlySet<string>, tree: { needle?: boolean })
   if (kinds.has('broadleaf')) return true;
   return tree.needle === true && kinds.has('conifers');
 }
+
+export function arrived(levels: readonly unknown[], level: number): number {
+  for (let at = Math.max(0, level); at < levels.length; at += 1) if (levels[at]) return at;
+  for (let at = Math.min(level, levels.length) - 1; at >= 0; at -= 1) if (levels[at]) return at;
+  return -1;
+}
+
+export function nearOrder(conifers: boolean): string[] {
+  return conifers ? ['broadleaf', 'cars', 'poles', 'people', 'conifers'] : ['broadleaf', 'cars', 'poles', 'people'];
+}
+
+export function phaseOf(far: ReadonlySet<string>, full: ReadonlySet<string>, kind: string): 'none' | 'far' | 'full' {
+  if (full.has(kind)) return 'full';
+  return far.has(kind) ? 'far' : 'none';
+}

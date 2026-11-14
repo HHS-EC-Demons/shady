@@ -1,9 +1,11 @@
 import * as THREE from 'three';
 import { GLTFLoader, type GLTF } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { MeshoptDecoder } from 'three/examples/jsm/libs/meshopt_decoder.module.js';
-import { CARS, TREE_SHAPES } from './forest';
+import { CARS, TREE_SHAPES, nearOrder, phaseOf } from './forest';
+import { MODELS_VERSION, earlyPack, takeBlob } from './early';
+import { nextTask } from './stages';
 
-export const MODELS_VERSION = 3;
+export { MODELS_VERSION } from './early';
 export const LEVELS = ['lod0', 'lod1', 'lod2'];
 export const TINTED = new Set(['leaves', 'leaves-far', 'crown', 'paint', 'kit']);
 export const TREE_LOOKS = new Set(['bark', 'leaves', 'leaves-far', 'crown']);
@@ -20,15 +22,19 @@ export const KINDS: Record<Kind, string[]> = {
 };
 
 const CORE: Kind[] = ['broadleaf', 'cars', 'poles', 'people'];
+const NEAR_DELAY_MS = 250;
 const PLACEHOLDER = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=';
 
 export type Look = { key: string; name: string; map: THREE.Texture | null; cutoff: number; double: boolean; colors: boolean; rough: number };
 export type Part = { look: string; geometry: THREE.BufferGeometry; color: THREE.Color };
-export type Model = { name: string; levels: Part[][] };
-export type Library = { models: Map<string, Model>; looks: Map<string, Look>; kinds: Set<Kind> };
+export type Model = { name: string; levels: (Part[] | null)[] };
+export type Library = { models: Map<string, Model>; looks: Map<string, Look>; kinds: Set<Kind>; full: Set<Kind> };
 
 type Loaded = { models: Model[]; looks: Look[] };
 type Picture = ImageBitmap | HTMLImageElement;
+type Stage = 'far' | 'full';
+type Json = { textures?: { source?: number; extensions?: Record<string, { source?: number }> }[]; images?: { uri?: string }[] };
+type Pack = { gltf: GLTF; address: string };
 
 const done = new Map<string, Loaded>();
 const flying = new Map<string, Promise<Loaded | null>>();
@@ -37,39 +43,85 @@ const pictures = new Map<string, Promise<Picture>>();
 const textures = new Map<string, THREE.Texture>();
 const listeners = new Set<() => void>();
 const merged = new Map<string, Library | null>();
+let packing: Promise<Pack | null> | null = null;
+let packed: Pack | null = null;
+let nearing: Promise<void> | null = null;
+let needles = false;
+let telling = false;
 let place = '';
 let version = 0;
-
-export function kindOf(model: string): Kind | null {
-  for (const kind of Object.keys(KINDS) as Kind[]) if (KINDS[kind].includes(model)) return kind;
-  return null;
-}
+let decoding = false;
 
 export function wanted(conifers: boolean): Kind[] {
   return conifers ? [...CORE, 'conifers'] : CORE;
 }
 
+function levelsOf(name: string): number {
+  return name.startsWith('tree-') ? 3 : 2;
+}
+
+function loader(): GLTFLoader {
+  if (!decoding && typeof Worker !== 'undefined') {
+    decoding = true;
+    MeshoptDecoder.useWorkers(2);
+  }
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((address) => (address.startsWith('data:') || address.endsWith('.glb') ? address : PLACEHOLDER));
+  const result = new GLTFLoader(manager);
+  result.setMeshoptDecoder(MeshoptDecoder);
+  return result;
+}
+
 function floatGeometry(source: THREE.BufferGeometry, matrix: THREE.Matrix4): THREE.BufferGeometry {
   const geometry = new THREE.BufferGeometry();
+  const e = matrix.elements;
+  const scale = Math.hypot(e[0], e[1], e[2]);
   for (const name of ['position', 'normal', 'uv', 'color']) {
-    const attribute = source.getAttribute(name);
+    const attribute = source.getAttribute(name) as THREE.BufferAttribute | undefined;
     if (!attribute) continue;
+    const woven = (attribute as unknown as THREE.InterleavedBufferAttribute).isInterleavedBufferAttribute === true;
     const size = name === 'color' ? 3 : attribute.itemSize;
-    const array = new Float32Array(attribute.count * size);
-    for (let index = 0; index < attribute.count; index += 1) {
-      for (let part = 0; part < size; part += 1) array[index * size + part] = attribute.getComponent(index, part);
+    const count = attribute.count;
+    const input = (woven ? (attribute as unknown as THREE.InterleavedBufferAttribute).data.array : attribute.array) as ArrayLike<number>;
+    const stride = woven ? (attribute as unknown as THREE.InterleavedBufferAttribute).data.stride : attribute.itemSize;
+    const offset = woven ? (attribute as unknown as THREE.InterleavedBufferAttribute).offset : 0;
+    const array = new Float32Array(count * size);
+    const unit = attribute.normalized ? (input instanceof Int8Array ? 127 : input instanceof Uint8Array ? 255 : input instanceof Int16Array ? 32767 : input instanceof Uint16Array ? 65535 : 1) : 1;
+    const signed = input instanceof Int8Array || input instanceof Int16Array;
+    for (let index = 0; index < count; index += 1) {
+      for (let part = 0; part < size; part += 1) {
+        const raw = input[index * stride + offset + part] / unit;
+        array[index * size + part] = signed && unit !== 1 ? Math.max(raw, -1) : raw;
+      }
+    }
+    if (name === 'position') {
+      for (let index = 0; index < count; index += 1) {
+        const x = array[index * 3];
+        const y = array[index * 3 + 1];
+        const z = array[index * 3 + 2];
+        array[index * 3] = e[0] * x + e[4] * y + e[8] * z + e[12];
+        array[index * 3 + 1] = e[1] * x + e[5] * y + e[9] * z + e[13];
+        array[index * 3 + 2] = e[2] * x + e[6] * y + e[10] * z + e[14];
+      }
+    } else if (name === 'normal') {
+      for (let index = 0; index < count; index += 1) {
+        const x = (e[0] * array[index * 3] + e[4] * array[index * 3 + 1] + e[8] * array[index * 3 + 2]) / scale;
+        const y = (e[1] * array[index * 3] + e[5] * array[index * 3 + 1] + e[9] * array[index * 3 + 2]) / scale;
+        const z = (e[2] * array[index * 3] + e[6] * array[index * 3 + 1] + e[10] * array[index * 3 + 2]) / scale;
+        const length = Math.hypot(x, y, z) || 1;
+        array[index * 3] = x / length;
+        array[index * 3 + 1] = y / length;
+        array[index * 3 + 2] = z / length;
+      }
     }
     geometry.setAttribute(name, new THREE.BufferAttribute(array, size));
   }
   const index = source.getIndex();
   if (index) geometry.setIndex(new THREE.BufferAttribute(Uint32Array.from(index.array as ArrayLike<number>), 1));
-  geometry.applyMatrix4(matrix);
   geometry.computeBoundingSphere();
   geometry.computeBoundingBox();
   return geometry;
 }
-
-type Json = { textures?: { source?: number; extensions?: Record<string, { source?: number }> }[]; images?: { uri?: string }[] };
 
 function chunkOf(buffer: ArrayBuffer): Json {
   const view = new DataView(buffer);
@@ -98,10 +150,7 @@ function decode(blob: Blob): Promise<Picture> {
 function picture(address: string): Promise<Picture> {
   let known = pictures.get(address);
   if (!known) {
-    known = fetch(address).then((answer) => {
-      if (!answer.ok) throw new Error('picture');
-      return answer.blob().then(decode);
-    });
+    known = takeBlob(address).then(decode);
     known.catch(() => pictures.delete(address));
     pictures.set(address, known);
   }
@@ -134,12 +183,13 @@ function textureFor(address: string, image: Picture, from: THREE.Texture): THREE
 }
 
 function unify(models: Model[], looks: Look[]): void {
+  const parts = models.flatMap((model) => model.levels.flatMap((level) => level ?? []));
   for (const look of looks) {
-    const parts = models.flatMap((model) => model.levels.flat()).filter((part) => part.look === look.key);
-    const colors = parts.some((part) => part.geometry.getAttribute('color'));
-    const uvs = parts.some((part) => part.geometry.getAttribute('uv'));
+    const own = parts.filter((part) => part.look === look.key);
+    const colors = own.some((part) => part.geometry.getAttribute('color'));
+    const uvs = own.some((part) => part.geometry.getAttribute('uv'));
     look.colors = colors;
-    for (const part of parts) {
+    for (const part of own) {
       const count = part.geometry.getAttribute('position').count;
       if (colors && !part.geometry.getAttribute('color')) part.geometry.setAttribute('color', new THREE.BufferAttribute(new Float32Array(count * 3).fill(1), 3));
       if (uvs && !part.geometry.getAttribute('uv')) part.geometry.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(count * 2), 2));
@@ -147,64 +197,141 @@ function unify(models: Model[], looks: Look[]): void {
   }
 }
 
-async function loadSet(base: string, names: string[]): Promise<Loaded | null> {
+async function pictured(gltf: GLTF, node: THREE.Object3D, address: string, images: Map<string, Picture>): Promise<void> {
+  const needed = new Set<string>();
+  node.traverse((object) => {
+    const map = ((object as THREE.Mesh).material as THREE.MeshStandardMaterial | undefined)?.map;
+    if ((object as THREE.Mesh).isMesh && map) needed.add(imageOf(gltf, map, address));
+  });
+  await Promise.all([...needed].map((image) => picture(image).then((found) => images.set(image, found))));
+}
+
+function meshesOf(node: THREE.Object3D): THREE.Mesh[] {
+  const meshes: THREE.Mesh[] = [];
+  node.traverse((object) => {
+    if ((object as THREE.Mesh).isMesh) meshes.push(object as THREE.Mesh);
+  });
+  return meshes;
+}
+
+function partOf(gltf: GLTF, mesh: THREE.Mesh, address: string, images: Map<string, Picture>, looks: Map<string, Look>): Part {
+  const material = mesh.material as THREE.MeshStandardMaterial;
+  const from = material.map;
+  const image = from ? imageOf(gltf, from, address) : '';
+  const found = image ? images.get(image) : undefined;
+  if (from && !found) throw new Error('picture');
+  const key = image ? `${material.name}@${image}` : material.name;
+  if (!looks.has(key)) {
+    const map = from && found ? textureFor(image, found, from) : null;
+    looks.set(key, { key, name: material.name, map, cutoff: material.alphaTest, double: material.side === THREE.DoubleSide, colors: false, rough: material.roughness });
+  }
+  return { look: key, geometry: floatGeometry(mesh.geometry, mesh.matrixWorld), color: material.color.clone() };
+}
+
+function partsOf(gltf: GLTF, node: THREE.Object3D, address: string, images: Map<string, Picture>, looks: Map<string, Look>): Part[] {
+  return meshesOf(node).map((mesh) => partOf(gltf, mesh, address, images, looks));
+}
+
+function drop(gltf: GLTF): void {
+  gltf.scene.traverse((object) => {
+    const mesh = object as THREE.Mesh;
+    if (!mesh.isMesh) return;
+    mesh.geometry.dispose();
+    const material = mesh.material as THREE.MeshStandardMaterial;
+    material.map?.dispose();
+    material.dispose();
+  });
+}
+
+function packOf(base: string): Promise<Pack | null> {
+  if (packed) return Promise.resolve(packed);
+  if (!packing) {
+    let address = '';
+    packing = earlyPack(base)
+      .then((found) => {
+        address = found.address;
+        return loader().parseAsync(found.buffer, address.slice(0, address.lastIndexOf('/') + 1));
+      })
+      .then((gltf) => {
+        gltf.scene.updateMatrixWorld(true);
+        packed = { gltf, address };
+        return packed;
+      })
+      .catch(() => null)
+      .finally(() => {
+        packing = null;
+      });
+  }
+  return packing;
+}
+
+async function farSet(base: string, names: string[]): Promise<Loaded | null> {
+  const pack = await packOf(base);
+  if (!pack) return null;
   try {
-    const addresses = names.map((name) => new URL(`${base}models/${name}.glb?v=${MODELS_VERSION}`, window.location.href).href);
-    const buffers = await Promise.all(
-      addresses.map((address) =>
-        fetch(address).then((answer) => {
-          if (!answer.ok) throw new Error('model');
-          return answer.arrayBuffer();
-        }),
-      ),
-    );
     const images = new Map<string, Picture>();
-    const needed = new Set<string>();
-    buffers.forEach((buffer, which) => {
-      for (const image of chunkOf(buffer).images ?? []) if (image.uri) needed.add(new URL(image.uri, addresses[which]).href);
+    const nodes = names.map((name) => {
+      const level = levelsOf(name) - 1;
+      const node = pack.gltf.scene.getObjectByName(`${name}@${LEVELS[level]}`);
+      if (!node) throw new Error('model');
+      return { name, level, node };
     });
-    await Promise.all([...needed].map((address) => picture(address).then((image) => images.set(address, image))));
-    const manager = new THREE.LoadingManager();
-    manager.setURLModifier((address) => (needed.has(address) ? PLACEHOLDER : address));
-    const loader = new GLTFLoader(manager);
-    loader.setMeshoptDecoder(MeshoptDecoder);
-    const files = await Promise.all(buffers.map((buffer, which) => loader.parseAsync(buffer, addresses[which].slice(0, addresses[which].lastIndexOf('/') + 1))));
+    for (const { node } of nodes) await pictured(pack.gltf, node, pack.address, images);
     const looks = new Map<string, Look>();
-    const models = files.map((gltf, which): Model => {
+    const models = nodes.map(({ name, level, node }): Model => {
+      const levels: (Part[] | null)[] = new Array(levelsOf(name)).fill(null);
+      levels[level] = partsOf(pack.gltf, node, pack.address, images, looks);
+      return { name, levels };
+    });
+    unify(models, [...looks.values()]);
+    return { models, looks: [...looks.values()] };
+  } catch {
+    return null;
+  }
+}
+
+async function fullSet(base: string, names: string[]): Promise<Loaded | null> {
+  const addresses = names.map((name) => new URL(`${base}models/${name}.glb?v=${MODELS_VERSION}`, window.location.href).href);
+  const downloads = addresses.map((address) =>
+    fetch(address).then((answer) => {
+      if (!answer.ok) throw new Error('model');
+      return answer.arrayBuffer();
+    }),
+  );
+  for (const download of downloads) download.catch(() => undefined);
+  try {
+    const looks = new Map<string, Look>();
+    const models: Model[] = [];
+    for (let which = 0; which < names.length; which += 1) {
+      const name = names[which];
+      const address = addresses[which];
+      const buffer = await downloads[which];
+      const images = new Map<string, Picture>();
+      await Promise.all(
+        (chunkOf(buffer).images ?? [])
+          .filter((image) => image.uri)
+          .map((image) => {
+            const at = new URL(image.uri as string, address).href;
+            return picture(at).then((found) => images.set(at, found));
+          }),
+      );
+      await nextTask();
+      const gltf = await loader().parseAsync(buffer, address.slice(0, address.lastIndexOf('/') + 1));
       gltf.scene.updateMatrixWorld(true);
-      const levels: Part[][] = [];
-      for (const level of LEVELS) {
+      await nextTask();
+      const levels: (Part[] | null)[] = [];
+      for (const level of LEVELS.slice(0, levelsOf(name))) {
         const node = gltf.scene.getObjectByName(level);
-        if (!node) break;
+        if (!node) throw new Error('model');
         const parts: Part[] = [];
-        node.traverse((object) => {
-          const mesh = object as THREE.Mesh;
-          if (!mesh.isMesh) return;
-          const material = mesh.material as THREE.MeshStandardMaterial;
-          const from = material.map;
-          const address = from ? imageOf(gltf, from, addresses[which]) : '';
-          const image = address ? images.get(address) : undefined;
-          if (from && !image) throw new Error('picture');
-          const key = address ? `${material.name}@${address}` : material.name;
-          if (!looks.has(key)) {
-            const map = from && image ? textureFor(address, image, from) : null;
-            looks.set(key, { key, name: material.name, map, cutoff: material.alphaTest, double: material.side === THREE.DoubleSide, colors: false, rough: material.roughness });
-          }
-          parts.push({ look: key, geometry: floatGeometry(mesh.geometry, mesh.matrixWorld), color: material.color.clone() });
-        });
+        for (const mesh of meshesOf(node)) {
+          parts.push(partOf(gltf, mesh, address, images, looks));
+          await nextTask();
+        }
         levels.push(parts);
       }
-      return { name: names[which], levels };
-    });
-    for (const gltf of files) {
-      gltf.scene.traverse((object) => {
-        const mesh = object as THREE.Mesh;
-        if (!mesh.isMesh) return;
-        mesh.geometry.dispose();
-        const material = mesh.material as THREE.MeshStandardMaterial;
-        material.map?.dispose();
-        material.dispose();
-      });
+      drop(gltf);
+      models.push({ name, levels });
     }
     unify(models, [...looks.values()]);
     return { models, looks: [...looks.values()] };
@@ -216,16 +343,21 @@ async function loadSet(base: string, names: string[]): Promise<Loaded | null> {
 function tell(): void {
   version += 1;
   merged.clear();
-  for (const listener of listeners) listener();
+  if (telling) return;
+  telling = true;
+  void nextTask().then(() => {
+    telling = false;
+    for (const listener of listeners) listener();
+  });
 }
 
-function attempt(base: string, kind: Kind): Promise<Loaded | null> {
-  const key = `${base} ${kind}`;
+function attempt(base: string, kind: Kind, stage: Stage): Promise<Loaded | null> {
+  const key = `${base} ${kind} ${stage}`;
   const known = done.get(key);
   if (known) return Promise.resolve(known);
   let run = flying.get(key);
   if (!run) {
-    run = loadSet(base, KINDS[kind]).then((result) => {
+    run = (stage === 'far' ? farSet(base, KINDS[kind]) : fullSet(base, KINDS[kind])).then((result) => {
       flying.delete(key);
       if (result) {
         done.set(key, result);
@@ -238,14 +370,14 @@ function attempt(base: string, kind: Kind): Promise<Loaded | null> {
   return run;
 }
 
-function later(base: string, kind: Kind): void {
-  const key = `${base} ${kind}`;
+function later(base: string, kind: Kind, stage: Stage): void {
+  const key = `${base} ${kind} ${stage}`;
   if (waiting.has(key) || typeof window === 'undefined') return;
   waiting.set(
     key,
     window.setTimeout(() => {
       waiting.delete(key);
-      void attempt(base, kind);
+      void attempt(base, kind, stage);
     }, RETRY_MS),
   );
 }
@@ -256,8 +388,15 @@ function build(conifers: boolean): Library | null {
   const models = new Map<string, Model>();
   const looks = new Map<string, Look>();
   const kinds = new Set<Kind>();
+  const far = new Set<Kind>();
+  const full = new Set<Kind>();
   for (const kind of wanted(conifers)) {
-    const set = done.get(`${place} ${kind}`);
+    if (done.has(`${place} ${kind} far`)) far.add(kind);
+    if (done.has(`${place} ${kind} full`)) full.add(kind);
+  }
+  for (const kind of wanted(conifers)) {
+    const phase = phaseOf(far, full, kind);
+    const set = phase === 'none' ? undefined : done.get(`${place} ${kind} ${phase}`);
     if (!set) continue;
     kinds.add(kind);
     for (const model of set.models) models.set(model.name, model);
@@ -267,7 +406,7 @@ function build(conifers: boolean): Library | null {
       else looks.set(look.key, look);
     }
   }
-  const library = kinds.size > 0 ? { models, looks, kinds } : null;
+  const library = kinds.size > 0 ? { models, looks, kinds, full } : null;
   if (library) unify([...models.values()], [...looks.values()]);
   merged.set(memo, library);
   return library;
@@ -281,12 +420,42 @@ export async function loadLibrary(base: string, conifers = false): Promise<Libra
   place = base;
   await Promise.all(
     wanted(conifers).map((kind) =>
-      attempt(base, kind).then((result) => {
-        if (!result) later(base, kind);
+      attempt(base, kind, 'far').then((result) => {
+        if (!result) later(base, kind, 'far');
       }),
     ),
   );
   return build(conifers);
+}
+
+export function loadNear(conifers = false): Promise<void> {
+  const base = place;
+  if (conifers) needles = true;
+  if (!base) return Promise.resolve();
+  if (nearing) return nearing;
+  nearing = (async () => {
+    for (let at = 0; at < nearOrder(needles).length; at += 1) {
+      const kind = nearOrder(needles)[at] as Kind;
+      await nextTask();
+      const result = await attempt(base, kind, 'full');
+      if (!result) later(base, kind, 'full');
+    }
+  })().finally(() => {
+    nearing = null;
+  });
+  return nearing;
+}
+
+export function nearSoon(conifers = false): () => void {
+  if (typeof window === 'undefined') return () => undefined;
+  let timer = 0;
+  const frame = window.requestAnimationFrame(() => {
+    timer = window.setTimeout(() => void loadNear(conifers), NEAR_DELAY_MS);
+  });
+  return () => {
+    window.cancelAnimationFrame(frame);
+    window.clearTimeout(timer);
+  };
 }
 
 export function peekLibrary(conifers = false): Library | null {
@@ -298,13 +467,9 @@ export function watchLibrary(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-export function libraryVersion(): number {
-  return version;
-}
-
 export function releaseLibrary(library: Library | null | undefined): void {
   if (!library) return;
-  for (const model of library.models.values()) for (const level of model.levels) for (const part of level) part.geometry.dispose();
+  for (const model of library.models.values()) for (const level of model.levels) for (const part of level ?? []) part.geometry.dispose();
   for (const look of library.looks.values()) look.map?.dispose();
 }
 
