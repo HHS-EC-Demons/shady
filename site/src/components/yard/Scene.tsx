@@ -32,6 +32,7 @@ const SUN_LOW = new THREE.Color('#ffe6c8');
 const SUN_HIGH = new THREE.Color('#fff7ec');
 const MAPPED_LIFT = 1.12;
 const BLOB_SPREAD = 1.9;
+const BACKDROP_OVERLAP = 4;
 const FLOOR = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
 const spot = new THREE.Vector3();
 
@@ -824,15 +825,37 @@ function Rig({ yard, reach }: { yard: Yard; reach: number }) {
   );
 }
 
+function backdropShape(yard: Yard): THREE.ShapeGeometry {
+  const grid = yard.ground.grid;
+  const [mx, my] = yard.middle;
+  const outer = new THREE.Shape();
+  outer.absarc(0, 0, yard.radius * 12, 0, Math.PI * 2, false);
+  const left = grid.minX - mx + BACKDROP_OVERLAP;
+  const right = grid.minX + grid.cols * grid.cell - mx - BACKDROP_OVERLAP;
+  const low = grid.minY - my + BACKDROP_OVERLAP;
+  const high = grid.minY + grid.rows * grid.cell - my - BACKDROP_OVERLAP;
+  if (right > left && high > low) {
+    const hole = new THREE.Path();
+    hole.moveTo(left, low);
+    hole.lineTo(left, high);
+    hole.lineTo(right, high);
+    hole.lineTo(right, low);
+    hole.closePath();
+    outer.holes.push(hole);
+  }
+  return new THREE.ShapeGeometry(outer, 32);
+}
+
 export function Backdrop({ yard }: { yard: Yard }) {
   const stacked = useThree((state) => state.gl.getContextAttributes()?.stencil === true);
+  const geometry = useMemo(() => backdropShape(yard), [yard]);
+  useEffect(() => () => geometry.dispose(), [geometry]);
   return (
     <>
       <color attach="background" args={['#e9eff1']} />
       <fog attach="fog" args={['#e9eff1', yard.radius * 4, yard.radius * 9]} />
-      <mesh name="backdrop" rotation-x={-Math.PI / 2} position-y={-0.3} renderOrder={stacked ? 2 : -2} raycast={() => null}>
-        <circleGeometry args={[yard.radius * 12, 64]} />
-        <meshBasicMaterial color={PAPER} stencilWrite={stacked} stencilWriteMask={0} stencilRef={1} stencilFunc={THREE.NotEqualStencilFunc} />
+      <mesh name="backdrop" geometry={geometry} rotation-x={-Math.PI / 2} position-y={-0.3} renderOrder={stacked ? 2 : -2} raycast={() => null}>
+        <meshBasicMaterial color={PAPER} depthWrite={false} stencilWrite={stacked} stencilWriteMask={0} stencilRef={1} stencilFunc={THREE.NotEqualStencilFunc} />
       </mesh>
     </>
   );
@@ -851,9 +874,9 @@ export function Pulse({ yard }: { yard: Yard }) {
   return null;
 }
 
-type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel; standing?: number; onReady: () => void };
+type SceneProps = { yard: Yard; layer: RefObject<HTMLDivElement | null>; shadow?: number; texture?: number; props?: PropLevel; standing?: number; grain?: boolean; onReady: () => void };
 
-export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS.high.texture, props = TIERS.high.props, standing = TIERS.high.standing, onReady }: SceneProps) {
+export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS.high.texture, props = TIERS.high.props, standing = TIERS.high.standing, grain = TIERS.high.grain, onReady }: SceneProps) {
   const reach = sunReach(yard);
   return (
     <Stages onReady={onReady}>
@@ -861,7 +884,7 @@ export function Scene({ yard, layer, shadow = TIERS.high.shadow, texture = TIERS
       <Pulse yard={yard} />
       <Prime run={() => yard.readyCells()} />
       <Prime run={(gl) => primeGround(yard, gl)} />
-      <Ground yard={yard} texture={texture} />
+      <Ground yard={yard} texture={texture} grain={grain} />
       <Prime run={() => primeBlocks(yard)} />
       <Blocks yard={yard} />
       <MappedTrees yard={yard} most={standing} grounded={props !== null && !props.light} />

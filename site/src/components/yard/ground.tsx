@@ -156,8 +156,12 @@ float keep(float size, float pixel) {
 }
 
 float detail(vec2 p, float size, float offset, float pixel) {
-  if (pixel >= size * 0.5) return 0.0;
-  return noise(p / size + offset) * keep(size, pixel);
+  #ifdef GROUND_GRAIN
+    if (pixel >= size * 0.5) return 0.0;
+    return noise(p / size + offset) * keep(size, pixel);
+  #else
+    return 0.0;
+  #endif
 }
 
 float joint(float coord, float pixel) {
@@ -181,9 +185,13 @@ float grain(vec2 p, vec2 fw, float pixel) {
   }
   if (kind < 1.5) {
     float fine = 0.03 * detail(p, 0.18, 0.0, pixel);
-    if (pixel >= 1.75) return fine;
-    vec2 r = vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y);
-    return fine - 0.03 * smoothstep(-0.2, 0.7, noise(r / 3.5 + 7.3)) * keep(3.5, pixel);
+    #ifdef GROUND_GRAIN
+      if (pixel >= 1.75) return fine;
+      vec2 r = vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y);
+      return fine - 0.03 * smoothstep(-0.2, 0.7, noise(r / 3.5 + 7.3)) * keep(3.5, pixel);
+    #else
+      return fine;
+    #endif
   }
   if (kind < 2.5) {
     float seams = 0.0;
@@ -192,8 +200,12 @@ float grain(vec2 p, vec2 fw, float pixel) {
   }
   if (kind < 3.5) return mown(p, pixel);
   if (kind < 4.5) {
-    vec2 q = aligned ? vec2(dot(p, vAlong.xy) / 9.0, dot(p, vec2(-vAlong.y, vAlong.x)) / 3.0) : p / 6.0;
-    return 0.015 * noise(q + 11.0);
+    #ifdef GROUND_GRAIN
+      vec2 q = aligned ? vec2(dot(p, vAlong.xy) / 9.0, dot(p, vec2(-vAlong.y, vAlong.x)) / 3.0) : p / 6.0;
+      return 0.015 * noise(q + 11.0);
+    #else
+      return 0.0;
+    #endif
   }
   if (kind < 5.5) return 0.03 * detail(p, 0.12, 0.0, pixel);
   if (kind < 6.5) return 0.025 * detail(p, 0.4, 5.0, pixel) + 0.035 * detail(p, 2.0, 13.0, pixel);
@@ -201,17 +213,21 @@ float grain(vec2 p, vec2 fw, float pixel) {
 }
 
 float relief(float pixel) {
-  if (pixel >= ${(BEVEL / 2).toFixed(4)}) return 0.0;
-  float spread = dot(vBevel.xz, vBevel.xz);
-  if (spread < 0.04) return 0.0;
-  vec2 outward = vBevel.xz * inversesqrt(spread) * sign(vBevel.y);
-  vec3 tilted = vec3(outward.x * 0.6428, 0.7660, outward.y * 0.6428);
-  float level = max(uSun.y, 0.02);
-  float change = clamp((max(dot(tilted, uSun), 0.0) / level - 1.0) * 2.2, -1.0, 1.0);
-  float profile = smoothstep(0.0, 0.6, abs(vBevel.y));
-  float low = smoothstep(0.02, 0.22, uSun.y);
-  float far = 1.0 - smoothstep(${(BEVEL / 7).toFixed(4)}, ${(BEVEL / 2).toFixed(4)}, pixel);
-  return 0.14 * change * profile * low * far;
+  #ifdef GROUND_GRAIN
+    if (pixel >= ${(BEVEL / 2).toFixed(4)}) return 0.0;
+    float spread = dot(vBevel.xz, vBevel.xz);
+    if (spread < 0.04) return 0.0;
+    vec2 outward = vBevel.xz * inversesqrt(spread) * sign(vBevel.y);
+    vec3 tilted = vec3(outward.x * 0.6428, 0.7660, outward.y * 0.6428);
+    float level = max(uSun.y, 0.02);
+    float change = clamp((max(dot(tilted, uSun), 0.0) / level - 1.0) * 2.2, -1.0, 1.0);
+    float profile = smoothstep(0.0, 0.6, abs(vBevel.y));
+    float low = smoothstep(0.02, 0.22, uSun.y);
+    float far = 1.0 - smoothstep(${(BEVEL / 7).toFixed(4)}, ${(BEVEL / 2).toFixed(4)}, pixel);
+    return 0.14 * change * profile * low * far;
+  #else
+    return 0.0;
+  #endif
 }
 
 void main() {
@@ -342,7 +358,7 @@ export function primeGround(yard: Yard, gl: THREE.WebGLRenderer): void {
   keep(yard, `ground ${stacked}`, () => build(yard, stacked));
 }
 
-export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; texture?: number; inert?: boolean }) {
+export function Ground({ yard, texture = 4096, inert = false, grain = true }: { yard: Yard; texture?: number; inert?: boolean; grain?: boolean }) {
   const grid = yard.ground.grid;
   const width = grid.cols * grid.cell;
   const depth = grid.rows * grid.cell;
@@ -373,7 +389,7 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
       depthWrite: false,
       depthTest: true,
       side: THREE.DoubleSide,
-      defines: stacked ? { GROUND_SHADOW: '' } : {},
+      defines: { ...(stacked ? { GROUND_SHADOW: '' } : {}), ...(grain ? { GROUND_GRAIN: '' } : {}) },
       lights: stacked,
       fog: stacked,
       stencilWrite: stacked,
@@ -400,7 +416,7 @@ export function Ground({ yard, texture = 4096, inert = false }: { yard: Yard; te
         uSheen: { value: KINDS.map((kind) => SHEEN[kind] ?? 0) },
       },
     });
-  }, [yard, grid, heat, contact, texture, width, depth, stacked]);
+  }, [yard, grid, heat, contact, texture, width, depth, stacked, grain]);
   useEffect(
     () => () => {
       for (const uniform of Object.values(material.uniforms)) {
