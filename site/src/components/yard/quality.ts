@@ -1,10 +1,11 @@
 export type Tier = 'high' | 'medium' | 'low';
 export type PropLevel = { cars: number; people: number; light: boolean; shadows: boolean } | null;
+export type Levels = { trees: readonly [number, number]; props: number; floor: number };
 
-export const TIERS: Record<Tier, { dpr: number; shadow: number; texture: number; props: PropLevel; standing: number; grain: boolean }> = {
-  high: { dpr: 1.5, shadow: 3072, texture: 2048, props: { cars: 300, people: 150, light: false, shadows: true }, standing: 600, grain: true },
-  medium: { dpr: 1.25, shadow: 2048, texture: 2048, props: { cars: 140, people: 70, light: true, shadows: false }, standing: 250, grain: false },
-  low: { dpr: 1, shadow: 1024, texture: 2048, props: null, standing: 150, grain: false },
+export const TIERS: Record<Tier, { dpr: number; shadow: number; texture: number; props: PropLevel; standing: number; grain: boolean; antialias: boolean; levels: Levels }> = {
+  high: { dpr: 1.5, shadow: 3072, texture: 2048, props: { cars: 300, people: 150, light: false, shadows: true }, standing: 600, grain: true, antialias: true, levels: { trees: [150, 400], props: 70, floor: 1 } },
+  medium: { dpr: 1.25, shadow: 2048, texture: 2048, props: { cars: 140, people: 70, light: true, shadows: false }, standing: 250, grain: false, antialias: false, levels: { trees: [70, 220], props: 40, floor: 2 } },
+  low: { dpr: 1, shadow: 1024, texture: 2048, props: null, standing: 150, grain: false, antialias: false, levels: { trees: [35, 120], props: 0, floor: 2 } },
 };
 
 const ORDER: Tier[] = ['high', 'medium', 'low'];

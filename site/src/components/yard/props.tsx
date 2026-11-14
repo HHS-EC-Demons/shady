@@ -1,4 +1,4 @@
-import { useFrame } from '@react-three/fiber';
+import { useFrame, useThree } from '@react-three/fiber';
 import { useEffect, useMemo } from 'react';
 import * as THREE from 'three';
 import { atHome, type Campus } from '@/engine/campus';
@@ -6,12 +6,15 @@ import type { Yard } from './controller';
 import type { Gear } from '@/engine/sports';
 import { along, axisHeading, bandPads, courts, fields, lightPoles, onRoof, parkingStalls, thin, walkers, type Area } from './layout';
 import { Clay, type Vec } from './clay';
+import { Crowd, buildCrowd, type CrowdOptions, type Member } from './crowd';
+import { chooseCar, choosePerson, mix, type Role } from './forest';
 import { buildGear, type GearMeshes } from './gear';
+import { demandNear, type Kind as ModelKind, type Library } from './library';
 import { BLOB_LIFT, buildBlob } from './models';
-import { TIERS, type PropLevel } from './quality';
-import { keep, take } from './stages';
+import { TIERS, type Levels, type PropLevel } from './quality';
+import { keep, take, useCrowd, useFresh } from './stages';
 
-type Placement = { x: number; y: number; heading: number; stretch?: number; color?: THREE.Color };
+type Placement = { x: number; y: number; heading: number; stretch?: number; color?: THREE.Color; kind?: string };
 type Kind = 'cars' | 'poles' | 'nets' | 'posts' | 'goals' | 'people';
 type Model = { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial };
 
@@ -45,6 +48,13 @@ const TYRE = 0.3;
 const SILL = 0.62;
 const GLASS: Vec = [0.3, 0.335, 0.37];
 const KINDS: Kind[] = ['cars', 'poles', 'nets', 'posts', 'goals', 'people'];
+const CROWDED = new Map<Kind, ModelKind>([
+  ['cars', 'cars'],
+  ['poles', 'poles'],
+  ['people', 'people'],
+]);
+const PROP_REFERENCE = 4.5;
+const SIZES: Record<string, number> = { car: 4.5, person: 1.7, pole: 9 };
 
 function hash(a: number, b: number, salt: number): number {
   let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(salt | 0, 0x9e3779b1);
@@ -284,13 +294,14 @@ function placeCars(yard: Yard, cap: number): Placement[] {
       y: stall.y + Math.sin(turn) * reach,
       heading: stall.heading + flip + (random() * 2 - 1) * CAR_YAW,
       color: new THREE.Color(pick(CARS, CAR_WEIGHTS, random())),
+      kind: chooseCar(mix(Math.round(stall.x * 8), Math.round(stall.y * 8), 23)),
     };
   });
 }
 
 function placePoles(yard: Yard): Placement[] {
   const poles = lightPoles(yard.campus).filter((pole) => free(yard.campus, pole.x, pole.y));
-  return thin(poles, POLE_CAP).map((pole, index) => ({ x: pole.x, y: pole.y, heading: pole.heading + (index % 2 === 0 ? 0 : Math.PI) }));
+  return thin(poles, POLE_CAP).map((pole, index) => ({ x: pole.x, y: pole.y, heading: pole.heading + (index % 2 === 0 ? 0 : Math.PI), kind: 'pole-lot-double' }));
 }
 
 function placeGear(gear: Gear[]): Placement[] {
@@ -300,8 +311,8 @@ function placeGear(gear: Gear[]): Placement[] {
 function placePeople(yard: Yard, light: boolean): Placement[] {
   const result: Placement[] = [];
   const campus = yard.campus;
-  const add = (x: number, y: number, heading: number, color: THREE.Color) => {
-    if (free(campus, x, y)) result.push({ x, y, heading, color });
+  const add = (x: number, y: number, heading: number, color: THREE.Color, role: Role) => {
+    if (free(campus, x, y)) result.push({ x, y, heading, color, kind: choosePerson(role, mix(Math.round(x * 8), Math.round(y * 8), 41)) });
   };
   homeAreas(campus, bandPads(campus)).forEach((pad, padIndex) => {
     const rows = light ? BAND_ROWS / 2 : BAND_ROWS;
@@ -311,7 +322,7 @@ function placePeople(yard: Yard, light: boolean): Placement[] {
     for (let row = 0; row < rows; row += 1) {
       for (let file = 0; file < BAND_FILES; file += 1) {
         const [x, y] = along(pad, (file - (BAND_FILES - 1) / 2) * BAND_GAP, (row - (rows - 1) / 2) * BAND_GAP);
-        add(x, y, facing + (random() * 2 - 1) * 0.05, new THREE.Color(row === rows - 1 ? BAND_FRONT : BAND_UNIFORM));
+        add(x, y, facing + (random() * 2 - 1) * 0.05, new THREE.Color(row === rows - 1 ? BAND_FRONT : BAND_UNIFORM), 'band');
       }
     }
   });
@@ -325,7 +336,7 @@ function placePeople(yard: Yard, light: boolean): Placement[] {
       const u = end * lines.half * (0.72 + random() * 0.14);
       const v = (random() * 2 - 1) * lines.side * 0.55;
       const [x, y] = along(court, u, v);
-      add(x, y, axisHeading(court) + (end > 0 ? Math.PI : 0), clayTone(random));
+      add(x, y, axisHeading(court) + (end > 0 ? Math.PI : 0), clayTone(random), 'player');
     }
   });
   homeAreas(campus, fields(campus)).forEach((field, fieldIndex) => {
@@ -343,13 +354,13 @@ function placePeople(yard: Yard, light: boolean): Placement[] {
       }
       spots.push([u, v]);
       const [x, y] = along(field, u, v);
-      add(x, y, axisHeading(field) + (team > 0 ? Math.PI : 0) + (random() * 2 - 1) * 0.6, new THREE.Color(team > 0 ? TEAM_HOME : TEAM_AWAY));
+      add(x, y, axisHeading(field) + (team > 0 ? Math.PI : 0) + (random() * 2 - 1) * 0.6, new THREE.Color(team > 0 ? TEAM_HOME : TEAM_AWAY), 'player');
     }
   });
   walkers(campus, (x, y) => free(campus, x, y)).forEach((walker, index) => {
     if (light && index % 2 === 1) return;
     const random = seeded(12011 + index * 53);
-    add(walker.x, walker.y, walker.heading + (index % 3 === 0 ? Math.PI : 0), clayTone(random));
+    add(walker.x, walker.y, walker.heading + (index % 3 === 0 ? Math.PI : 0), clayTone(random), 'walker');
   });
   return result;
 }
@@ -404,13 +415,17 @@ function blobs(yard: Yard, blob: ReturnType<typeof buildBlob>, cars: Placement[]
 
 type Placed = { lists: Record<Kind, Placement[]>; gear: GearMeshes };
 
-function placeAll(yard: Yard, level: NonNullable<PropLevel>): Placed {
-  const gear = buildGear(yard.campus, yard.middle);
+export function propKinds(library: Library | null): string {
+  return [...CROWDED.values()].filter((kind) => library?.kinds.has(kind)).join(' ');
+}
+
+function placeAll(yard: Yard, level: NonNullable<PropLevel>, kinds: string): Placed {
+  const gear = buildGear(yard.campus, yard.middle, kinds.includes('poles'));
   const nets = placeGear(gear.nets);
   return {
     lists: {
       cars: placeCars(yard, level.cars),
-      poles: placePoles(yard),
+      poles: [...placePoles(yard), ...gear.lamps.map((lamp) => ({ ...lamp, kind: 'pole-lot' }))],
       nets,
       posts: nets,
       goals: placeGear(gear.uprights).map((item) => ({ ...item, stretch: 1 })),
@@ -420,17 +435,54 @@ function placeAll(yard: Yard, level: NonNullable<PropLevel>): Placed {
   };
 }
 
-function placedKey(level: NonNullable<PropLevel>): string {
-  return `props ${level.cars} ${level.people} ${level.light}`;
+function placedKey(level: NonNullable<PropLevel>, kinds: string): string {
+  return `props ${level.cars} ${level.people} ${level.light} ${kinds}`;
 }
 
-export function primeProps(yard: Yard, level: PropLevel = TIERS.high.props): void {
-  if (level) keep(yard, placedKey(level), () => placeAll(yard, level));
+export function primeProps(yard: Yard, level: PropLevel = TIERS.high.props, kinds = ''): void {
+  if (level) keep(yard, placedKey(level, kinds), () => placeAll(yard, level, kinds));
 }
 
-export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: PropLevel }) {
+function sizeOf(kind: string): number {
+  return SIZES[kind.slice(0, kind.indexOf('-'))] ?? PROP_REFERENCE;
+}
+
+type Crowded = { crowd: Crowd; box: THREE.Box3; kinds: string; object: THREE.Object3D; dispose: () => void };
+
+function membersOf(yard: Yard, library: Library, lists: Record<Kind, Placement[]>): { members: Member[]; box: THREE.Box3 } {
+  const members: Member[] = [];
+  const box = new THREE.Box3();
+  const spot = new THREE.Vector3();
+  const turn = new THREE.Quaternion();
+  const one = new THREE.Vector3(1, 1, 1);
+  for (const kind of CROWDED.keys()) {
+    for (const item of lists[kind]) {
+      if (!item.kind || !library.models.has(item.kind)) continue;
+      const [x, , z] = yard.toScene(item.x, item.y);
+      spot.set(x, 0, z);
+      box.expandByPoint(spot);
+      turn.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, item.heading + (kind === 'poles' ? 0 : Math.PI / 2));
+      members.push({ model: item.kind, matrix: new THREE.Matrix4().compose(spot, turn, one), tint: item.color ?? null, size: sizeOf(item.kind) });
+    }
+  }
+  return { members, box };
+}
+
+function wrap(crowd: Crowd, box: THREE.Box3, library: Library): Crowded {
+  return { crowd, box, kinds: propKinds(library), object: crowd.object, dispose: () => crowd.dispose() };
+}
+
+function crowdOptions(levels: Levels, shadows: boolean, multi: boolean): CrowdOptions {
+  return { edges: [levels.props], reference: PROP_REFERENCE, floor: shadows ? 1 : null, bulk: multi ? 1 : 0 };
+}
+
+const PROP_KINDS: readonly ModelKind[] = ['cars', 'poles', 'people'];
+
+export function Props({ yard, level = TIERS.high.props, library: given = null, levels = TIERS.high.levels }: { yard: Yard; level?: PropLevel; library?: Library | null; levels?: Levels }) {
+  const library = useFresh(given, PROP_KINDS);
   const models = useMemo(buildModels, []);
   const blob = useMemo(buildBlob, []);
+  const multi = useThree((state) => state.gl.extensions.has('WEBGL_multi_draw'));
   useEffect(
     () => () => {
       for (const kind of KINDS) {
@@ -444,9 +496,29 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
     },
     [models, blob],
   );
+  const kinds = propKinds(library);
+  const spread = useMemo(() => (level ? take(yard, placedKey(level, kinds), () => placeAll(yard, level, kinds)) : null), [yard, level, kinds]);
+  const crowd = useCrowd(
+    () => {
+      if (!level || !spread || !library || !kinds) return null;
+      const { members, box } = membersOf(yard, library, spread.lists);
+      return wrap(new Crowd(library, members, crowdOptions(levels, level.shadows, multi)), box, library);
+    },
+    [yard, level, spread, library, levels, multi],
+    async (pause) => {
+      if (!level || !spread || !library || !kinds) return null;
+      const { members, box } = membersOf(yard, library, spread.lists);
+      return wrap(await buildCrowd(library, members, crowdOptions(levels, level.shadows, multi), pause), box, library);
+    },
+  );
+  const drawn = crowd ? crowd.kinds : '';
   const meshes = useMemo(() => {
-    if (!level) return [];
-    const { lists: placed, gear } = take(yard, placedKey(level), () => placeAll(yard, level));
+    if (!level || !spread) return [];
+    const { lists: placed, gear } = spread;
+    const modelled = (kind: Kind) => {
+      const own = CROWDED.get(kind);
+      return own !== undefined && drawn.includes(own);
+    };
     const shades = blobs(yard, blob, placed.cars);
     const merged: { kind: string; mesh: THREE.Mesh }[] = [];
     if (gear.solid) {
@@ -462,8 +534,8 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
       mesh.matrixAutoUpdate = false;
       merged.push({ kind: 'mesh', mesh });
     }
-    return [
-      ...KINDS.flatMap((kind) => {
+    const meshes = [
+      ...KINDS.filter((kind) => !modelled(kind)).flatMap((kind) => {
         const mesh = instanced(yard, models[kind], placed[kind], level.shadows);
         if (mesh && models[kind].material.transparent) mesh.renderOrder = 2;
         return mesh ? [{ kind: kind as string, mesh: mesh as THREE.Mesh }] : [];
@@ -471,7 +543,8 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
       ...merged,
       ...(shades ? [{ kind: 'car shades', mesh: shades as THREE.Mesh }] : []),
     ];
-  }, [yard, level, models, blob]);
+    return meshes;
+  }, [yard, level, models, blob, spread, drawn]);
   useEffect(
     () => () => {
       for (const { mesh } of meshes) {
@@ -483,6 +556,7 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
   );
   const reach = useMemo(() => {
     const box = new THREE.Box3();
+    if (crowd) box.union(crowd.box);
     for (const { mesh } of meshes) {
       if (mesh instanceof THREE.InstancedMesh) {
         if (!mesh.boundingBox) mesh.computeBoundingBox();
@@ -493,9 +567,14 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
       }
     }
     return { box, shown: true };
-  }, [meshes]);
+  }, [meshes, crowd]);
   useFrame((state) => {
-    if (meshes.length === 0) return;
+    if (meshes.length === 0 && !crowd) return;
+    if (crowd) {
+      crowd.crowd.object.visible = reach.shown;
+      crowd.crowd.update(state.camera, state.gl.domElement.height);
+      if (crowd.crowd.wanted.size > 0) demandNear(crowd.crowd.wanted);
+    }
     const camera = state.camera as THREE.PerspectiveCamera;
     const fov = camera.isPerspectiveCamera ? camera.fov : 30;
     const zoom = camera.isPerspectiveCamera ? camera.zoom : 1;
@@ -505,6 +584,7 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
     if (shown === reach.shown) return;
     reach.shown = shown;
     for (const { mesh } of meshes) mesh.visible = shown;
+    if (crowd) crowd.crowd.object.visible = shown;
   });
   if (!level) return null;
   return (
@@ -512,6 +592,7 @@ export function Props({ yard, level = TIERS.high.props }: { yard: Yard; level?: 
       {meshes.map(({ kind, mesh }) => (
         <primitive key={kind} object={mesh} raycast={() => null} />
       ))}
+      {crowd && <primitive object={crowd.crowd.object} />}
     </group>
   );
 }

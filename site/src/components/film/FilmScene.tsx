@@ -9,11 +9,14 @@ import type { Story } from '@/engine/story';
 import { treeRadius } from '@/engine/growth';
 import type { Yard } from '../yard/controller';
 import { orientedBox } from '../yard/layout';
+import { Crowd, buildCrowd, type Member } from '../yard/crowd';
+import { demandNear, nearSoon, peekLibrary, releaseLibrary, type Library } from '../yard/library';
 import { BLOB_LIFT, buildSail, treeTint } from '../yard/models';
-import { Props, primeProps } from '../yard/props';
-import { TIERS, chipName, keepFrame, powerChoice, quality, shortChip } from '../yard/quality';
-import { Backdrop, Blocks, Ground, MappedTrees, Pulse, Sun, blobSize, primeBlocks, primeGround, sunReach, useBlob, useTree } from '../yard/Scene';
-import { Prime, Stages } from '../yard/stages';
+import { Props, primeProps, propKinds } from '../yard/props';
+import { TIERS, chipName, keepFrame, powerChoice, quality, shortChip, type Levels, type Tier } from '../yard/quality';
+import { Backdrop, Blocks, Ground, MappedTrees, Pulse, Sun, TREE_KINDS, TREE_REFERENCE, blobSize, broadIn, plantKey, primeBlocks, primeGround, sunReach, treeMember, useBlob, useLibrary, useMulti, useTree } from '../yard/Scene';
+import { Prime, Stages, useCrowd, useFresh, useShell } from '../yard/stages';
+import { useAntialias } from '../yard/YardCanvas';
 import type { Days } from './Film';
 import { BEATS, film } from './state';
 
@@ -180,6 +183,62 @@ function Trees({ yard, story, state }: { yard: Yard; story: Story; state: Shared
       <instancedMesh ref={trunks} args={[model.trunk, undefined, count]} castShadow frustumCulled={false}>
         <meshStandardMaterial vertexColors color="#ffffff" roughness={1} />
       </instancedMesh>
+      <instancedMesh ref={blobs} name="blobs" args={[blob.geometry, blob.material, count]} renderOrder={-1} frustumCulled={false} />
+    </group>
+  );
+}
+
+function StoryTrees({ yard, story, state, library: given, levels }: { yard: Yard; story: Story; state: Shared; library: Library; levels: Levels }) {
+  const library = useFresh(given, TREE_KINDS);
+  const blob = useBlob();
+  const blobs = useRef<THREE.InstancedMesh>(null);
+  const seen = useRef({ plant: -1, grow: -1 });
+  const count = story.trees.length;
+  const multi = useMulti();
+  const spots = useMemo(() => story.trees.map((tree) => yard.toScene(tree.x, tree.y)), [story, yard]);
+  const tints = useMemo(() => story.trees.map((_, index) => treeTint(index)), [story]);
+  const members = () => story.trees.map((tree, index) => treeMember(library, tree, plantKey(index + 1), spots[index][0], spots[index][2], tints[index], SAPLING, 0));
+  const options = { edges: levels.trees, reference: TREE_REFERENCE, floor: levels.floor, bulk: multi ? 2 : 0, candidates: broadIn(library) };
+  const crowd = useCrowd(
+    () => new Crowd(library, members(), options),
+    [library, story, spots, tints, levels, multi],
+    (pause) => buildCrowd(library, members(), options, pause),
+  );
+  const drawn = useRef(crowd);
+  const tools = useMemo(() => ({ member: { model: '', matrix: new THREE.Matrix4(), tint: null, size: 1 } as Member, matrix: new THREE.Matrix4(), flat: new THREE.Quaternion(), at: new THREE.Vector3(), size: new THREE.Vector3() }), []);
+
+  useFrame((frame) => {
+    const mesh = blobs.current;
+    if (drawn.current !== crowd) {
+      drawn.current = crowd;
+      seen.current.plant = -1;
+      seen.current.grow = -1;
+    }
+    if (mesh && (Math.abs(seen.current.plant - state.plant) >= 0.0005 || Math.abs(seen.current.grow - state.grow) >= 0.0005)) {
+      seen.current.plant = state.plant;
+      seen.current.grow = state.grow;
+      const { member, matrix, flat, at, size } = tools;
+      for (let index = 0; index < count; index += 1) {
+        const tree = story.trees[index];
+        const pop = ease(state.plant * count - index);
+        treeMember(library, tree, plantKey(index + 1), spots[index][0], spots[index][2], tints[index], state.grow, pop, member);
+        crowd.set(index, member);
+        const spread = Math.max(0.001, blobSize(tree.radius) * state.grow * pop);
+        at.set(spots[index][0], BLOB_LIFT, spots[index][2]);
+        size.set(spread, 1, spread);
+        matrix.compose(at, flat, size);
+        mesh.setMatrixAt(index, matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+    }
+    crowd.update(frame.camera, frame.gl.domElement.height);
+    if (crowd.wanted.size > 0) demandNear(crowd.wanted);
+  });
+
+  if (count === 0) return null;
+  return (
+    <group name="trees">
+      <primitive object={crowd.object} />
       <instancedMesh ref={blobs} name="blobs" args={[blob.geometry, blob.material, count]} renderOrder={-1} frustumCulled={false} />
     </group>
   );
@@ -627,10 +686,20 @@ function Meter() {
   return null;
 }
 
-export default function FilmScene({ yard, days, story, onFrame, debug }: Props) {
+export default function FilmScene(props: Props) {
   const tier = useSyncExternalStore(quality.subscribe, quality.snapshot, quality.server);
+  const antialias = useAntialias(tier);
+  useEffect(() => () => releaseLibrary(peekLibrary(true) ?? peekLibrary(false)), []);
+  return <FilmCanvas key={antialias ? 'smooth' : 'sharp'} {...props} tier={tier} antialias={antialias} />;
+}
+
+function FilmCanvas({ yard, days, story, onFrame, debug, tier, antialias }: Props & { tier: Tier; antialias: boolean }) {
   const shared = useMemo<Shared>(() => ({ plant: 0, grow: SAPLING, draw: 0, move: 0, sail: 0, zoom: 1000 }), []);
   const [ready, setReady] = useState(false);
+  const conifers = yard.campus.trees.some((tree) => tree.needle === true);
+  const library = useShell(useLibrary(conifers));
+  useEffect(() => (ready ? nearSoon(conifers) : undefined), [ready, conifers]);
+  const levels = TIERS[tier].levels;
   const reach = sunReach(yard);
   return (
     <Canvas
@@ -639,7 +708,7 @@ export default function FilmScene({ yard, days, story, onFrame, debug }: Props) 
       frameloop={ready ? 'demand' : 'never'}
       dpr={[1, TIERS[tier].dpr]}
       camera={{ fov: 30, near: 5, far: 9000, position: [-300, 420, 600] }}
-      gl={{ antialias: true, stencil: true, preserveDrawingBuffer: keepFrame(), powerPreference: powerChoice() }}
+      gl={{ antialias, stencil: true, preserveDrawingBuffer: keepFrame(), powerPreference: powerChoice() }}
       style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}
       aria-hidden="true"
     >
@@ -652,10 +721,10 @@ export default function FilmScene({ yard, days, story, onFrame, debug }: Props) 
         <Ground yard={yard} texture={TIERS[tier].texture} grain={TIERS[tier].grain} inert />
         <Prime run={() => primeBlocks(yard)} />
         <Blocks yard={yard} />
-        <MappedTrees yard={yard} most={TIERS[tier].standing} grounded={tier === 'high'} />
-        <Prime run={() => primeProps(yard, TIERS[tier].props)} />
-        <Props yard={yard} level={TIERS[tier].props} />
-        <Trees yard={yard} story={story} state={shared} />
+        <MappedTrees yard={yard} most={TIERS[tier].standing} grounded={tier === 'high'} library={library} levels={levels} />
+        <Prime run={() => primeProps(yard, TIERS[tier].props, propKinds(library))} />
+        <Props yard={yard} level={TIERS[tier].props} library={library} levels={levels} />
+        {library && library.kinds.has('broadleaf') ? <StoryTrees yard={yard} story={story} state={shared} library={library} levels={levels} /> : <Trees yard={yard} story={story} state={shared} />}
         <SailModel yard={yard} sail={story.sail} state={shared} />
         <Walk yard={yard} story={story} state={shared} />
         <Sun yard={yard} reach={reach} shadow={TIERS[tier].shadow} locked />
