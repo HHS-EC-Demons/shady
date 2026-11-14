@@ -5,7 +5,7 @@ import { at, courtFences, frameOf, layoutOf, type Gear } from '@/engine/sports';
 import { Clay, type Vec } from './clay';
 import { onRoof } from './layout';
 
-export type GearMeshes = { solid: THREE.BufferGeometry | null; sheer: THREE.BufferGeometry | null; uprights: Gear[]; nets: Gear[] };
+export type GearMeshes = { solid: THREE.BufferGeometry | null; sheer: THREE.BufferGeometry | null; uprights: Gear[]; nets: Gear[]; lamps: { x: number; y: number; heading: number }[] };
 
 type Middle = [number, number];
 type Pair = { solid: THREE.BufferGeometry; sheer: THREE.BufferGeometry | null };
@@ -570,7 +570,7 @@ function matrixAt(spot: Vec, heading: number, stretch: Vec = [1, 1, 1]): THREE.M
   return new THREE.Matrix4().compose(new THREE.Vector3(...spot), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), heading), new THREE.Vector3(...stretch));
 }
 
-export function buildGear(campus: Campus, middle: Middle): GearMeshes {
+export function buildGear(campus: Campus, middle: Middle, apart = false): GearMeshes {
   const toScene = (x: number, y: number): Vec => [x - middle[0], 0, -(y - middle[1])];
   const free = (x: number, y: number) => atHome(campus, x, y) && !onRoof(campus, x, y);
   const parts = modelsOf();
@@ -580,6 +580,7 @@ export function buildGear(campus: Campus, middle: Middle): GearMeshes {
   const looseSheer = new Clay();
   const uprights: Gear[] = [];
   const nets: Gear[] = [];
+  const lamps: { x: number; y: number; heading: number }[] = [];
   const pair = (model: Pair, spot: Vec, heading: number, stretch?: Vec) => {
     const matrix = matrixAt(spot, heading, stretch);
     solid.add(model.solid, matrix);
@@ -641,6 +642,10 @@ export function buildGear(campus: Campus, middle: Middle): GearMeshes {
     if (thing.kind === 'door' || thing.kind === 'main door' || !free(thing.x, thing.y)) continue;
     const spot = toScene(thing.x, thing.y);
     const heading = thing.kind === 'flagpole' ? 0 : headingFor(campus, thing);
+    if (apart && thing.kind === 'lamp') {
+      lamps.push({ x: thing.x, y: thing.y, heading });
+      continue;
+    }
     const model = thing.kind === 'flagpole' ? parts.flagpole : thing.kind === 'bench' ? parts.bench : thing.kind === 'bikes' ? parts.bikes : parts.lamp;
     solid.add(model, matrixAt(spot, heading));
   }
@@ -654,7 +659,7 @@ export function buildGear(campus: Campus, middle: Middle): GearMeshes {
     sheer.add(geometry);
     geometry.dispose();
   }
-  return { solid: solid.geometry(), sheer: sheer.geometry(), uprights, nets };
+  return { solid: solid.geometry(), sheer: sheer.geometry(), uprights, nets, lamps };
 }
 
 function backstop(solid: Clay, sheer: Clay, toScene: (x: number, y: number) => Vec, item: Gear): void {
