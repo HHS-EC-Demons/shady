@@ -1,6 +1,6 @@
 # Shady
 
-A 3D heat model of any school. The landing page scrolls through one hot day on a real campus. The yard lets you drag the sun, plant trees, stretch shade sails, check the model against a thermometer and print a planting plan with coordinates and cost.
+A 3D heat model of any school. The landing page scrolls through one hot day on a real campus. The yard lets you drag the sun, plant trees, stretch shade sails, check the model against a thermometer and print a planting plan with coordinates and cost. The district page models up to 48 schools in a city and lists them hottest first.
 
 A plan can be shared as a link or scanned from the QR code on the printed sheet, and whoever opens it sees the same plan live in 3D. The link carries the whole plan in its hash, so nothing is stored on a server.
 
@@ -35,9 +35,10 @@ npm run dev
 - `site/src/pages/index.astro` is the landing film. `site/src/components/film` holds its scene and scroll state.
 - `site/src/pages/yard.astro` is the interactive model. `site/src/components/yard` holds its controller, ground, models, covers, sports gear and scene.
 - `site/src/components/plan` is the printable plan sheet.
+- `site/src/pages/district.astro` is the district view. `site/src/engine/district.ts` lists a city's schools and summarizes each one, and `site/src/components/district` models them in a worker and draws the tiles.
 - `site/src/pages/sources.astro` lists every model number and its source.
 - `pipeline/fetch_campus.ts` rebuilds the default campus file with `bun pipeline/fetch_campus.ts`.
-- `checks` holds headless browser scripts for frame times, load times and the fallback stills.
+- `checks` holds headless browser scripts for frame times, load times and the fallback stills, and `checks/perf.yml`, a workflow that compares page speed against `main` when copied to `.github/workflows` on a branch named `perf/` something.
 
 ## What is real and what is not
 
@@ -52,5 +53,3 @@ npm run dev
 - Loading another school depends on public map servers that are sometimes busy.
 
 See `PERF.md` for measured frame times.
-
-The District page at `site/src/pages/district.astro` takes a city or district, finds up to 48 of its schools, models each one on the same hottest day and lists them hottest first, with the work in `site/src/engine/district.ts` and `site/src/components/district`.
