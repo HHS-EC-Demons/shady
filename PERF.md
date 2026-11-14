@@ -138,7 +138,45 @@ The closest view costs about 3.5 ms more because the detailed crown has many lea
 
 ### Page weight
 
-The film and the yard fetch the models at the same moment as the campus and keep the loading picture up until both are in. Only pages that draw 3D fetch them, and never with a preload link. At a school without conifers that is 18 files and 5 textures, 1.37 MB as `astro preview` serves them and 1.04 MB if the host compresses them. A school with conifers adds 2 files and 3 textures, 0.49 MB. The district page draws no trees and loads none.
+The film and the yard fetch `far.glb` and its far leaf textures at the same moment as the campus and keep the loading picture up until both are in. The full files follow after the first picture, see Far level first below. Only pages that draw 3D fetch them, and never with a preload link. At a school without conifers that is 18 files and 5 textures, 1.37 MB as `astro preview` serves them and 1.04 MB if the host compresses them, plus the 113 KB pack. A school with conifers adds 2 files and 3 textures, 0.49 MB. The district page draws no trees and loads none.
+
+### Far level first
+
+A review on 2026-11-14 found the yard's first picture 2.7 times later on slow 4G with the real models, 14.0 s where the build before them gave 5.2 s, because every model file had to arrive before the gate opened. The models now load in two steps.
+
+- `far.glb` holds only the far level of every model, the third level of the 8 trees and the second of the 6 cars, 4 people and 2 poles, 20 nodes and 7,855 vertices in 115,924 bytes. Its JSON is 46 KB of that, mostly the 103 compressed buffer views, so it misses the 80 KB aim. It points at the same far leaf textures as the full files, and only the ones the wanted kinds use are fetched. The pages start fetching it and its textures before three.js has arrived, and the yard starts fetching its scene code at the same time instead of after the models.
+- The gate opens when the campus and the pack are in, and everything draws at its far level. Level choice clamps to the levels that have arrived, so a close tree shows its far crown until its full file is in, never a hole.
+- After the first picture the full files follow one kind at a time, broadleaf, cars, poles, people, then conifers where the campus has them. Each crowd rebuilds only when its own kinds change step, builds in slices of one geometry or 256 members per task, uploads its textures one per task, compiles its shaders and the matching shadow depth shaders off the main thread, reads their uniforms one program per task, and only then swaps in. The swap keeps every position and tint. Meshopt decoding runs in two workers and each mesh is converted in its own task.
+- A kind whose pack step fails falls back to its clay shapes. A kind whose full files fail stays at its far level. Each is tried once more four seconds later.
+
+Measured on the production build served with gzip for text files as GitHub Pages does, against the build from before the real models, in headless Chromium with an empty cache. The slow profile is 1.6 Mbps down, 750 kbps up, 150 ms latency and the processor slowed 4 times. First picture is the moment the loading picture goes, near levels is the last geometry upload after the last full file. Total blocking time runs from the first paint to 3 s after near levels.
+
+| Page, slow profile | Before the models | Two steps, final build | Two steps, without the early fetch |
+| --- | --- | --- | --- |
+| Yard first picture | 6.57, 6.60, 6.67 s at load 5 | 7.73 s at load 6, then 8.37 and 13.67 s as the load rose to 16 | 8.39, 8.50, 8.28 s at loads 15 to 6 |
+| Yard near levels | same as first picture | 15.9 and 16.9 s | 16.5 to 16.8 s |
+| Yard bytes at first picture and at near levels | 648 KB | 922 KB and 2,143 KB | 921 KB and 2,142 KB |
+| Yard total blocking time | 794 to 878 ms | 1,089 and 1,918 ms | 1,109 to 1,438 ms |
+| Yard longest task, after the first picture | 210 to 234 ms | 254 and 375 ms | 265 to 292 ms |
+| Landing film live | 6.45 to 6.73 s at load 5 | 8.56 s at load 6, then 9.15 and 10.49 s | 8.66 to 9.10 s |
+| Landing near levels | same as live | 16.6 and 17.9 s | 16.6 to 18.6 s |
+| Landing bytes at live and at near levels | 735 KB | 1,016 KB and 2,237 KB | 1,015 KB and 2,236 KB |
+| Landing longest task after live | none over 50 ms | 117 and 226 ms | 95 to 256 ms |
+
+| Page, no throttling, loads 9 to 6 | Before the models | Two steps, without the early fetch |
+| --- | --- | --- |
+| Yard first picture | 1.52 to 1.58 s | 1.59 to 1.64 s |
+| Yard near levels | same | 2.45 to 2.60 s |
+| Yard longest task after the first picture | 69 to 81 ms | 96 to 118 ms |
+| Landing live | 1.66 to 1.70 s | 1.69 to 1.78 s |
+| Landing near levels | same | 2.39 to 2.50 s |
+| Landing longest task after live | none over 50 ms | 62 to 87 ms |
+
+On the slow profile the yard's first picture now comes about 1.1 s after the build before the models, inside the 1.5 s aim, where the single step build was 8.8 s behind on slow 4G. The landing film still goes live about 2 s after the old build, about 280 KB more over a 1.6 Mbps line plus the pack's decoding on the slowed processor. Phase two still has tasks over 200 ms on the slowed processor and up to about 120 ms without throttling, so the 50 ms aim is not met. A profile at a load near 75, taken before the slicing, showed the worst of them were shader programs being checked on first use and crowd building, which the final build moves into separate tasks. It was not profiled again. The frame gaps while phase two ran were at most 117 to 433 ms on the slow profile and 67 to 117 ms without throttling.
+
+Blocked files, on the dev build at loads of 127 to 180. One car file blocked kept every car at its far level while the other kinds went full. One near leaf texture blocked kept the broadleaf trees at their far level. A far leaf texture blocked gave clay broadleaf trees, as did the whole texture folder, with cars, poles and people real. The pack alone blocked gave clay shapes at the first picture and the full models once phase two arrived. No page errors in any case. The retry four seconds later fell inside each block, so none of them came back on that page.
+
+With both steps in, the seven beats look as before in Chromium, WebKit and Firefox, and the opening beat at live differs from the same beat after phase two in 0.11 percent of pixels. Scrolling straight to the close beats right after live on the slow network showed far crowns and no hole or flash. Firefox gave 93, 107, 101, 104, 117, 99 and 105 calls on high and 73, 70, 66, 69, 78, 69 and 85 on medium. The Intel chip on medium at the busiest beat took 8.42 ms of GPU time per frame at the median and 10.64 ms at the 99th percentile, at loads of 205 to 271.
 
 ## Scroll test
 
