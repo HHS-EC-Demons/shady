@@ -34,9 +34,12 @@ npm run dev
   - `detail.ts` turns map tags for colours, roofs and covered paths into clay tones and shapes.
 - `site/src/pages/index.astro` is the landing film. `site/src/components/film` holds its scene and scroll state.
 - `site/src/pages/yard.astro` is the interactive model. `site/src/components/yard` holds its controller, ground, models, covers, sports gear and scene.
+- `site/public/models` holds the trees, cars, light poles and people as compressed GLB files with their shared textures in `tex`. `manifest.json` beside them is the licence record for every shipped model and texture, with its source page, author, licence, triangles and bytes.
+  - `site/src/components/yard/library.ts` loads the models once, at the same time as the campus, in five kinds, broadleaf trees, conifers, cars, poles and people. A kind whose files do not load falls back to its old clay shapes while the others stay real, and it is tried again a few seconds later and on the next school or page.
+  - `site/src/components/yard/forest.ts` picks the model, the scale and the level of detail for each tree, car and person, and `site/src/components/yard/crowd.ts` draws them in a few batches with a cheaper copy for the shadow pass.
 - `site/src/components/plan` is the printable plan sheet.
 - `site/src/pages/district.astro` is the district view. `site/src/engine/district.ts` lists a city's schools and summarizes each one, and `site/src/components/district` models them in a worker and draws the tiles.
-- `site/src/pages/sources.astro` lists every model number and its source.
+- `site/src/pages/sources.astro` lists every model number and its source from `site/src/lib/sources.ts`, which also counts the distinct websites for the landing card.
 - `pipeline/fetch_campus.ts` rebuilds the default campus file with `bun pipeline/fetch_campus.ts`.
 - `checks` holds headless browser scripts for frame times, load times and the fallback stills, and `checks/perf.yml`, a workflow that compares page speed against `main` when copied to `.github/workflows` on a branch named `perf/` something.
 

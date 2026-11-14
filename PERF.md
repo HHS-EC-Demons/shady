@@ -6,13 +6,139 @@ Measured 2026-11-12 on a 2018 MacBook Pro in headless Chrome. The page asks for 
 
 | Budget | Result |
 | --- | --- |
-| 60 fps while scrolling at 1080p on integrated graphics | Intel UHD Graphics 630 at 1080p on the medium tier, 60 fps average and 60 fps at the 1% low in passes 2, 3 and 4 on 2026-11-12. The standing trees and the detail round brought it down to about 40 fps on a quiet machine. After the fixes in Integrated graphics after the detail round its GPU time per frame is 10 to 15 percent lower, and under loads of 43 to 285 it scrolled at 51 to 55 fps where the code before the fixes gave 43 to 51 under loads of 43 to 56. A quiet machine pass is still to be taken |
+| 60 fps while scrolling at 1080p on integrated graphics | Intel UHD Graphics 630 at 1080p on the medium tier, 60 fps average and 60 fps at the 1% low in passes 2, 3 and 4 on 2026-11-12. The standing trees and the detail round brought it down to about 40 fps on a quiet machine. After the fixes in Integrated graphics after the detail round its GPU time per frame is 10 to 15 percent lower, and under loads of 43 to 285 it scrolled at 51 to 55 fps where the code before the fixes gave 43 to 51 under loads of 43 to 56. A quiet machine pass is still to be taken. Since the real models went in on 2026-11-14 the medium tier draws without antialiasing, which halves its GPU time per frame to about 9 ms at 1080p, so the chip now has room for 60 fps. Every frame rate run of that day was taken under loads of 13 to 356 and none of them can show it |
 | 60 fps while scrolling on the fast chip | Radeon Pro 555X at 1080p and at 1440 by 900 at 2x on the high tier, 60 fps average and 60 fps at the 1% low in all four passes |
-| Under 100 draw calls | 54 at the busiest beat on high and 46 on medium with covers, sports gear, fences and street furniture, up from 48 and 41 |
-| Under 300k triangles | 269k at the busiest beat on high and 160k on medium with 478 standing trees, both counting the shadow pass, up from 262k and 155k |
+| At most 130 draw calls on high and 100 on medium, from 2026-11-14 | 116 at the busiest beat on high and 85 on medium with the real models, up from 54 and 46, and at most 113 and 85 in Firefox |
+| At most 700k triangles on high and 320k on medium, from 2026-11-14 | 552k at the busiest beat on high and 180k on medium with the real models, both counting the shadow pass, up from 269k and 160k |
+| Models add at most 2.5 MB over the wire | 1.37 MB at a school without conifers and 1.87 MB with them, as served without compression, or 1.04 MB and 1.47 MB if the host compresses them |
 | Initial JavaScript under 350 KB gzipped | 72 KB before the 3D code is asked for, from the earlier load test and not measured again |
 | Largest Contentful Paint under 2.5 s | 116 ms on a local server, from the earlier load test and not measured again |
 | HTML content visible before the 3D is ready | Heading painted at 72 ms and film live at 1.3 s, from the earlier load test and not measured again |
+
+## Real models
+
+On 2026-11-14 the clay trees, cars, light poles and people were replaced by real models, with their makers on the sources page. Each model is a compressed GLB file in `site/public/models`, trees in three levels of detail and the rest in two, with textures shared between models. The near levels, where few models are drawn, are batched meshes, one per material for every model and level together and drawn with one multi draw call each. The far levels, where most of the 480 trees and 300 cars sit, are instanced meshes, one per model and material. A first try batched every level, and it held 60 fps of GPU time but not of frames on the fast chip, 34 to 48 fps where the old build gave 57 to 60, because Chrome on this Mac splits a multi draw call into one Metal draw per model and that came to several thousand a frame. The batches also skip three.js per object culling and sorting, which cost about 9 ms of processor time a frame in that first try. Instead each set of models works out its levels and which models are in view only when the camera has moved 6 percent of the way to the nearest model or turned 3 degrees, with a margin around the view so nothing pops in at the edges, and shadow casters keep a wider margin. In the shadow pass the far levels of cars, people and poles are one merged mesh per model.
+
+Measured against the production build on `astro preview`, with the build from before the change served beside it as static files and measured in turn. Another session ran large builds most of the night and the one minute load moved between 8 and 356, so the frame rates show the busy machine. The comparisons rest on GPU time per frame from timer queries and on main thread time, taken with the two builds in turn so the load hits both alike.
+
+### What each tier draws
+
+Distances are for a 10 m tree or a car on a screen 1080 pixels tall. They grow with the size of the model and the height of the screen, and a model moves to a farther level only 15 percent past the edge, so it does not flicker.
+
+| Tier | Antialiasing | Trees | Cars, people and poles | Shadow pass |
+| --- | --- | --- | --- | --- |
+| High | 4x | detailed within 150 m, middle level to 400 m, far level beyond | detailed within 70 m, simple beyond | trees from the middle level or farther, props from the simple level |
+| Medium | none | detailed within 70 m, middle level to 220 m, far level beyond | detailed within 40 m, simple beyond | trees from the far level, props cast none |
+| Low | none | detailed within 35 m, middle level to 120 m, far level beyond | none | trees from the far level |
+
+### Antialiasing on the Intel chip
+
+Three choices for the medium tier, scrolled with the real models in at 1920 by 1080 with `gpu=low`, GPU time per frame over the whole scroll, two runs each at loads of 30 to 124.
+
+| Choice | p50 | p99 |
+| --- | --- | --- |
+| 4x as before | 18.4 ms | 22.3 ms |
+| None | 9.0 and 9.1 ms | 11.2 and 11.5 ms |
+| None with the pixel ratio raised to 1.5 | 15.0 and 15.1 ms | 18.6 and 18.4 ms |
+
+Only no antialiasing keeps the slowest frames under 16.7 ms. Close up pictures of roof edges, court lines and leaf edges on medium show light stair steps on roof edges and thin lines, and leaf edges look the same as on high because leaves are alpha tested either way. Alpha to coverage was tried on high and made crowns pale and speckled, so every tier uses a plain alpha test at the cutoff the models carry.
+
+### Busiest beat
+
+Calls and triangles from the `?perf` readout, sampled every frame while the film scrolls at 300 px a second, both counting the shadow pass. These do not depend on the load.
+
+| Tier | Before | After |
+| --- | --- | --- |
+| High | 54 calls, 269k tris | at most 116 calls and 552k tris |
+| Medium | 46 calls, 160k tris | at most 85 calls and 180k tris |
+| Medium on the Intel chip | 46 calls, 160k tris | at most 85 calls and 180k tris |
+| Low | 36 calls, 118k tris | at most 53 calls and 87k tris |
+
+Most of the new triangles on high are the 300 cars, about 370 triangles each in their simple level and drawn twice with their shadows. Most of the new calls are the instanced far levels, one per model and material that has something in view.
+
+### GPU time per frame over the scroll
+
+The before build at loads of 92 to 149 and the final after build at loads of 49 to 97, after earlier passes with the first after builds that agreed within 0.5 ms. Shadow and main are the mean milliseconds of each pass.
+
+| Screen | Chip and tier | Before p50 and p99 | Before shadow and main | After p50 and p99 | After shadow and main |
+| --- | --- | --- | --- | --- | --- |
+| 1920 by 1080 | Intel UHD Graphics 630, medium | 18.48 and 21.19 | 0.32 and 17.91 | 8.56 and 11.73 | 0.37 and 8.20 |
+| 1440 by 900 at 2x | Intel UHD Graphics 630, medium | 18.78 and 21.35 | 0.37 and 18.05 | 8.66 and 11.30 | 0.37 and 8.39 |
+| 1920 by 1080 | Radeon Pro 555X, high | 4.89 and 6.02 | 0.96 and 3.89 | 6.24 and 8.75 | 1.47 and 4.65 |
+| 1440 by 900 at 2x | Radeon Pro 555X, high | 6.29 and 7.99 | 0.96 and 5.31 | 7.95 and 11.85 | 1.49 and 6.55 |
+
+The Intel chip spends half the time it did, almost all of it from dropping antialiasing. The Radeon spends 1.4 to 1.7 ms more for the detailed trees and cars it now draws and their shadows, and stays under half a frame.
+
+### Main thread time per frame
+
+Chrome's task time per frame over the whole scroll from its Performance metrics, Radeon Pro 555X at 1920 by 1080 on high with the `?perf` readout on, the two builds in turn at loads of 8 to 14. The middle rows hide one part each with `hide=`.
+
+| Shown | Before, task time and frame rate | After, task time and frame rate |
+| --- | --- | --- |
+| Everything | 3.69 ms, 60 fps | 5.81 ms, 60 fps |
+| Without cars, people and poles | 3.27 ms, 60 fps | 4.96 ms, 60 fps |
+| Without trees | 4.26 ms, 59 fps | 4.40 ms, 60 fps |
+
+The models add about 2 ms of main thread work a frame on this chip, most of it the trees, and the frame stays well inside 16.7 ms.
+
+### Scroll test
+
+`checks/scroll-perf.js` on both builds, after first, in the quietest stretch of the night. The after pass ran while the one minute load rose from 9 to 23 and the before pass while it stayed between 23 and 20. Neither build pins a tier here, so a slow run can step down mid scroll, and the readout names the tier it ended on.
+
+| Run | Chip | Before frames, average, 1% low, slow frames, end tier | After frames, average, 1% low, slow frames, end tier |
+| --- | --- | --- | --- |
+| Laptop 1920 by 1080 with `gpu=low` | Intel UHD Graphics 630 | 344, 35 fps, 20 fps, 215, low | 567, 59 fps, 30 fps, 11, medium |
+| Laptop 1440 by 900 at 2x with `gpu=low` | Intel UHD Graphics 630 | 274, 34 fps, 15 fps, 186, medium | 361, 44 fps, 9 fps, 59, medium |
+| Laptop 1920 by 1080 | Radeon Pro 555X | 512, 53 fps, 15 fps, 37, high | 491, 51 fps, 12 fps, 41, high |
+| Laptop 1440 by 900 at 2x | Radeon Pro 555X | 429, 53 fps, 15 fps, 35, high | 429, 53 fps, 30 fps, 52, high |
+| Phone 390 by 844 at 3x | Radeon Pro 555X | 460, 60 fps, 60 fps, 0, high | 400, 52 fps, 20 fps, 39, high |
+| Laptop 1080p with the CPU slowed 4 times | Radeon Pro 555X | 206, 21 fps, 7 fps, 115, medium | 174, 18 fps, 3 fps, 116, medium |
+
+The Intel chip at 1080p now holds medium and scrolls at 59 fps where the old build fell to low and gave 35. The Radeon rows sit within a few frames of the old build except the phone size row, which lost 8 fps. The slowed processor row is close to the old build, and both fell to medium. Two passes earlier in the night at loads of 30 to 133 gave the first, fully batched build 34 to 50 fps on the Radeon, which is what led to the instanced far levels above. The after build measured here is two small changes older than the final code, which caches each model's top level, works out levels after 6 percent of movement or 3 degrees of turn instead of 4 percent and 2 degrees, and makes colour buffers up front. A quiet machine pass is still to be taken.
+
+### Yard
+
+`checks/yard-perf.js` on both builds, after first, with its draw counter now also counting multi draw calls. Each cell gives frames, average, 1% low and the most draw calls and triangles seen in a frame. The after pass ran at loads of 10 to 17 and the before pass at 17 to 69, so the before rows lost more to the machine.
+
+| Run | Place | Before orbit | After orbit | Before time slider | After time slider |
+| --- | --- | --- | --- | --- | --- |
+| 1920 by 1080 with `gpu=low` | Heritage | 566, 26 fps, 12, 29 calls, 68k | 613, 55 fps, 60, 70 calls, 171k | 815, 54 fps, 20 | 503, 60 fps, 60 |
+| 1920 by 1080 with `gpu=low` | Roosevelt High School | 507, 28 fps, 15, 47 calls, 61k | 839, 58 fps, 30, 80 calls, 86k | 751, 54 fps, 20 | 556, 60 fps, 60 |
+| 1440 by 900 at 2x with `gpu=low` | Heritage | 837, 36 fps, 10 | 758, 59 fps, 30 | 681, 57 fps, 30 | 546, 59 fps, 60 |
+| 1440 by 900 at 2x with `gpu=low` | Roosevelt High School | 668, 49 fps, 20 | 1011, 53 fps, 20 | 544, 59 fps, 30 | 551, 59 fps, 60 |
+| 1920 by 1080 | Heritage | 689, 60 fps, 60, 47 calls, 219k | 548, 60 fps, 60, 90 calls, 428k | 615, 60 fps, 60 | 498, 59 fps, 60 |
+| 1920 by 1080 | Roosevelt High School | 816, 58 fps, 30, 53 calls, 78k | 558, 59 fps, 30, 101 calls, 133k | 502, 60 fps, 60 | 513, 60 fps, 60 |
+| 1440 by 900 at 2x | Heritage | 581, 57 fps, 30 | 641, 58 fps, 20 | 610, 59 fps, 60 | 657, 55 fps, 20 |
+| 1440 by 900 at 2x | Roosevelt High School | 759, 47 fps, 8 | 765, 51 fps, 10 | 764, 57 fps, 20 | 611, 59 fps, 60 |
+
+The Intel rows gain the most, again from the medium tier dropping antialiasing. The after Heritage orbit on Intel had one 617 ms frame. Some instanced far levels and batches only learned they needed per model colours when they first came into view, so their shaders compiled mid orbit. The final code gives every coloured batch and instanced mesh its colour buffer when it is built, so the shaders compile with the rest of the scene before the first frame. A recheck of the final code at loads of 42 to 178 had no frame over 150 ms in that orbit, but the load was too high for its frame rates to say more.
+
+
+### Browsers without multi draw
+
+Firefox has no `WEBGL_multi_draw`, and three.js would then draw each near model of a batch on its own, 290 to 491 calls a frame on high in a review. Where the extension is missing every level is an instanced mesh instead. The `?perf` readout in Firefox on high gave 93, 107, 105, 104, 113, 98 and 105 calls at the seven beats, and 73, 70, 63, 69, 78, 68 and 85 on medium. Chromium gave 93, 86, 91, 83, 106, 78 and 105 on high, and WebKit the same within one call.
+
+### When a model file fails
+
+Models load in five kinds, broadleaf trees, conifers, cars, poles and people. A kind whose model or texture files fail falls back to its old clay shapes and the others stay real. A failure is never kept. The kind is tried once more four seconds later and again on the next school or page, and the scene swaps in the models when they arrive. Textures are fetched and decoded by the site itself, once each, so a missing texture shows only the browser's own failed request.
+
+### Low tier up close
+
+The low tier used to draw every tree at its far level, which smeared leaf cards and flat triangles over a close tree. It now draws the detailed level within 35 m and the middle level within 120 m. GPU time per frame on the Intel chip at 1920 by 1080 in the yard, median of 60 frames, far level only against the new levels, at loads of 58 to 184.
+
+| View | Far level only | New low tier |
+| --- | --- | --- |
+| Whole campus | 5.61 ms | 5.40 and 5.56 ms |
+| 50 m from a tree, looking at it | 6.24 ms | 6.62 and 6.75 ms |
+| 20 m from a tree | 6.97 ms | 10.15 and 10.55 ms |
+| 50 m from a tree, at eye height | 6.02 ms | 6.12 and 6.23 ms |
+| 120 m from a tree | 6.30 ms | 7.22 and 7.66 ms |
+
+The closest view costs about 3.5 ms more because the detailed crown has many leaf cards over each pixel, and stays well inside a frame.
+
+### Page weight
+
+The film and the yard fetch the models at the same moment as the campus and keep the loading picture up until both are in. Only pages that draw 3D fetch them, and never with a preload link. At a school without conifers that is 18 files and 5 textures, 1.37 MB as `astro preview` serves them and 1.04 MB if the host compresses them. A school with conifers adds 2 files and 3 textures, 0.49 MB. The district page draws no trees and loads none.
 
 ## Scroll test
 
@@ -158,7 +284,7 @@ The fixed beat pairs were taken before the medium grain change, which saves anot
 
 ### What the medium tier leaves out
 
-Since 2026-11-13 the medium tier no longer draws the fine noise grain on grass, asphalt, concrete, courts and soil, or the curb bevel shading along paths, courts and patches in close views. It already left out the soft blob under each standing tree, every standing tree past the first 250, the shadows of cars, people, poles, nets, goalposts, sports gear, fences and street furniture, and it draws 140 cars instead of 300 and 70 people instead of 150. Its shadow map is 2048 instead of 3072 and its pixel ratio stops at 1.25. The low tier also leaves out every prop and keeps 150 standing trees.
+Since 2026-11-14 the medium tier draws without antialiasing, shows the detailed tree model only within 70 m and the middle one within 220 m where high uses 150 m and 400 m, both for a 10 m tree on a 1080 pixel tall screen, shows the detailed cars and people only within 40 m where high uses 70 m, and draws tree shadows from the far level. Since 2026-11-13 the medium tier no longer draws the fine noise grain on grass, asphalt, concrete, courts and soil, or the curb bevel shading along paths, courts and patches in close views. It already left out the soft blob under each standing tree, every standing tree past the first 250, the shadows of cars, people, poles, nets, goalposts, sports gear, fences and street furniture, and it draws 140 cars instead of 300 and 70 people instead of 150. Its shadow map is 2048 instead of 3072 and its pixel ratio stops at 1.25. The low tier also leaves out every prop and keeps 150 standing trees.
 
 ### Yard and District
 
@@ -322,8 +448,8 @@ The heat model now runs in a module Web Worker that calls the same engine functi
 ## What keeps it fast
 
 - The canvas renders on demand. A frame is drawn only when scroll, the pointer, an animation or the model changes something. An idle page draws nothing.
-- Tiers set the pixel ratio cap at 1.5, 1.25 or 1, the shadow map at 3072, 2048 or 1024, and props at 300 cars and 150 people, 140 cars and 70 people, or none. Only the high tier draws the fine noise grain and curb shading on the ground. A chip named Intel starts on medium. A frame rate drop steps down one tier, waits 5 seconds before it can step again, and does nothing if the visitor picked a tier in the footer. A tier change only resizes the canvas and the shadow map and rebuilds the props.
-- One shadow casting light. Its shadow area follows the view, so close ups get sharp shadows from the same map. Cars, people, poles, nets and goalposts cast shadows only on high. On medium cars keep their contact blobs.
+- Tiers set the pixel ratio cap at 1.5, 1.25 or 1, the shadow map at 3072, 2048 or 1024, and props at 300 cars and 150 people, 140 cars and 70 people, or none. Only the high tier draws with 4x antialiasing and the fine noise grain and curb shading on the ground. A chip named Intel starts on medium. A frame rate drop steps down one tier, waits 5 seconds before it can step again, and does nothing if the visitor picked a tier in the footer. A tier change resizes the canvas and the shadow map and rebuilds the props and the model batches. A change between high and medium also builds a new canvas, because antialiasing is fixed when a canvas is made.
+- One shadow casting light. Its shadow area follows the view, so close ups get sharp shadows from the same map. Cars, people, poles, nets and goalposts cast shadows only on high. On medium cars keep their contact blobs. Trees cast on every tier, but the shadow pass draws them from a cheaper level than the colour pass, the middle level on high and the far level on medium and low, through a second set of batches on a layer only the shadow camera sees. Leaf shadows keep the alpha test, so they are leaf shaped.
 - Props hide when the nearest car would be under 3 pixels long. On the current campus the nearest car is still about 7 pixels in the widest film shots at 1080p, so they stay.
 - The ground is one draw call of about 19 thousand vector triangles, so edges stay sharp at any zoom with no large textures. In the film and the yard a stencil test lets each pixel take only its top ground layer, the ground samples the shadow map itself instead of a second full screen shadow plane, and the backdrop only fills pixels the ground left empty. The backdrop has a hole the size of the ground grid, so it is not even rasterized behind the ground, and it writes no depth.
 - Close up ground detail sits behind real branches on the pixel footprint. Noise, joints, mowing bands and curb relief run only when a pixel is smaller than the feature, sheen fades out past 0.6 m a pixel, and curb relief strips collapse in the vertex shader once relief can no longer show.
@@ -331,7 +457,8 @@ The heat model now runs in a module Web Worker that calls the same engine functi
 - The heat texture uploads before the frame starts, so it never breaks the render pass.
 - The film and yard canvases keep their drawing buffer on devices with a mouse or trackpad, so Chrome does not clear it in a pass of its own. Touch devices keep the browser default because no phone has been measured.
 - The shade sail is drawn at near zero size from the first frame, so its shaders compile at load instead of mid scroll.
-- Film trees use the lighter 683 triangle crown and standing trees a 79 triangle one, capped per tier. Neighbor buildings are one merged mesh.
+- Trees, cars, light poles and people are real models in three levels of detail for trees and two for the rest. The near levels of every model that share a material are one batched mesh drawn with one multi draw call, and the far levels are one instanced mesh per model and material, so a whole campus of trees costs about twenty draw calls with their shadows. Each model picks its level and whether it is in view from its distance to the camera, scaled by its size and the screen height, with a 15 percent dead band, and this is worked out again only when the camera has moved 6 percent of the way to the nearest model or turned 3 degrees. Standing trees stay capped per tier. Neighbor buildings are one merged mesh.
+- Leaves are alpha cut cards drawn with an alpha test and no blending. Far levels are a small opaque core with a few large cards, so 480 far trees add little fill.
 - No allocation inside frame callbacks.
 - The heat simulation runs once at load. Scrolling only blends finished results.
 - Three.js loads after first paint through a lazy import.
@@ -341,7 +468,8 @@ The heat model now runs in a module Web Worker that calls the same engine functi
 
 - A real mid range phone. The phone row above is this laptop at phone size.
 - A cold network. All load numbers are from a local server.
-- Safari and Firefox.
+- Safari and Firefox frame rates. Firefox has no multi draw extension, so there every level of every model is an instanced mesh instead of a batch. Its film then makes 93 to 113 draw calls a frame on high and 63 to 85 on medium.
+- The real models on a slow network. The film and the yard wait for 1.38 MB of models before they show, which adds several seconds on a slow phone connection.
 - The yard and District pages on a quiet machine. `checks/yard-perf.js` and `checks/district-perf.js` time them the same way as the film, and the runs above were taken under load.
 
 ## District

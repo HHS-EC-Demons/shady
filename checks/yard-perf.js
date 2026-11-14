@@ -39,6 +39,28 @@ async (page) => {
       add(mode, count, instances);
       return drawArraysInstanced.call(this, mode, first, count, instances);
     };
+    const getExtension = proto.getExtension;
+    proto.getExtension = function (name) {
+      const extension = getExtension.call(this, name);
+      if (name === 'WEBGL_multi_draw' && extension && !extension.__counted) {
+        extension.__counted = true;
+        const arrays = extension.multiDrawArraysWEBGL.bind(extension);
+        extension.multiDrawArraysWEBGL = (mode, firsts, firstsOffset, counts, countsOffset, drawcount) => {
+          let total = 0;
+          for (let index = 0; index < drawcount; index += 1) total += counts[countsOffset + index];
+          add(mode, total, 1);
+          return arrays(mode, firsts, firstsOffset, counts, countsOffset, drawcount);
+        };
+        const elements = extension.multiDrawElementsWEBGL.bind(extension);
+        extension.multiDrawElementsWEBGL = (mode, counts, countsOffset, type, offsets, offsetsOffset, drawcount) => {
+          let total = 0;
+          for (let index = 0; index < drawcount; index += 1) total += counts[countsOffset + index];
+          add(mode, total, 1);
+          return elements(mode, counts, countsOffset, type, offsets, offsetsOffset, drawcount);
+        };
+      }
+      return extension;
+    };
     const tick = () => {
       if (counts.calls > 0) window.__draws.push({ calls: counts.calls, tris: Math.round(counts.tris) });
       counts.calls = 0;
