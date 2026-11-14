@@ -15,10 +15,10 @@ import { BLOB_LIFT, buildBlob, buildBlock, buildCone, buildRoofUnits, buildSail,
 import { buildStructures } from './covers';
 import { Crowd, SHADOW_LAYER, buildCrowd, type Member } from './crowd';
 import { TREE_SHAPES, chooseTree, mix, modelled, spotHash, type TreeShape } from './forest';
-import { peekLibrary, watchLibrary, type Kind, type Library } from './library';
+import { demandNear, peekLibrary, watchLibrary, type Kind, type Library } from './library';
 import { Props, primeProps, propKinds } from './props';
 import { TIERS, type Levels, type PropLevel } from './quality';
-import { Prime, Stages, keep, take, useCrowd, useSettled } from './stages';
+import { Prime, Stages, keep, take, useCrowd, useFresh } from './stages';
 
 const INK = '#12261c';
 const LEAF = '#2f6243';
@@ -323,7 +323,7 @@ export function MappedTrees({ yard, most = TIERS.high.standing, grounded = true,
 }
 
 function ModelTrees({ yard, trees, grounded, library: given, levels }: { yard: Yard; trees: Tree[]; grounded: boolean; library: Library; levels: Levels }) {
-  const library = useSettled(given, TREE_KINDS);
+  const library = useFresh(given, TREE_KINDS);
   const blob = useBlob();
   const blobs = useRef<THREE.InstancedMesh>(null);
   const multi = useMulti();
@@ -341,6 +341,7 @@ function ModelTrees({ yard, trees, grounded, library: given, levels }: { yard: Y
   );
   useFrame((state) => {
     crowd.update(state.camera, state.gl.domElement.height);
+    if (crowd.wanted.size > 0) demandNear(crowd.wanted);
   });
   useEffect(() => {
     const mesh = blobs.current;
@@ -654,7 +655,7 @@ function Plan({ yard, library = null, levels = TIERS.high.levels }: { yard: Yard
   const blob = useBlob();
   const ids = yard.trees.map((tree) => tree.id).join(' ');
   const multi = useMulti();
-  const settled = useSettled(library, TREE_KINDS);
+  const settled = useFresh(library, TREE_KINDS);
   const leafy = settled && settled.kinds.has('broadleaf') ? settled : null;
   const members = (from: Library) =>
     yard.trees.map((tree) => {
@@ -671,6 +672,7 @@ function Plan({ yard, library = null, levels = TIERS.high.levels }: { yard: Yard
   const grove = useMemo<Grove>(() => (crowd && leafy ? { library: leafy, crowd } : null), [crowd, leafy]);
   useFrame((state) => {
     grove?.crowd.update(state.camera, state.gl.domElement.height);
+    if (grove && grove.crowd.wanted.size > 0) demandNear(grove.crowd.wanted);
   });
   return (
     <group>

@@ -5,6 +5,7 @@ import type { Yard } from './controller';
 import { nearSoon, peekLibrary, releaseLibrary, type Library } from './library';
 import { TIERS, keepFrame, powerChoice, quality, type Tier } from './quality';
 import { Scene, useLibrary } from './Scene';
+import { useShell } from './stages';
 
 type Props = { yard: Yard; layer: RefObject<HTMLDivElement | null>; tier: Tier; drawn: boolean; conifers: boolean; onReady: () => void };
 
@@ -21,7 +22,7 @@ export default function YardCanvas(props: Props) {
 }
 
 function Surface({ yard, layer, tier, drawn, conifers, antialias, onReady }: Props & { antialias: boolean }) {
-  const library: Library | null = useLibrary(conifers);
+  const library: Library | null = useShell(useLibrary(conifers));
   const [ready, setReady] = useState(false);
   useEffect(() => (ready ? nearSoon(conifers) : undefined), [ready, conifers]);
   return (

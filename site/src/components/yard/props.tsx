@@ -9,10 +9,10 @@ import { Clay, type Vec } from './clay';
 import { Crowd, buildCrowd, type CrowdOptions, type Member } from './crowd';
 import { chooseCar, choosePerson, mix, type Role } from './forest';
 import { buildGear, type GearMeshes } from './gear';
-import type { Kind as ModelKind, Library } from './library';
+import { demandNear, type Kind as ModelKind, type Library } from './library';
 import { BLOB_LIFT, buildBlob } from './models';
 import { TIERS, type Levels, type PropLevel } from './quality';
-import { keep, take, useCrowd, useSettled } from './stages';
+import { keep, take, useCrowd, useFresh } from './stages';
 
 type Placement = { x: number; y: number; heading: number; stretch?: number; color?: THREE.Color; kind?: string };
 type Kind = 'cars' | 'poles' | 'nets' | 'posts' | 'goals' | 'people';
@@ -479,7 +479,7 @@ function crowdOptions(levels: Levels, shadows: boolean, multi: boolean): CrowdOp
 const PROP_KINDS: readonly ModelKind[] = ['cars', 'poles', 'people'];
 
 export function Props({ yard, level = TIERS.high.props, library: given = null, levels = TIERS.high.levels }: { yard: Yard; level?: PropLevel; library?: Library | null; levels?: Levels }) {
-  const library = useSettled(given, PROP_KINDS);
+  const library = useFresh(given, PROP_KINDS);
   const models = useMemo(buildModels, []);
   const blob = useMemo(buildBlob, []);
   const multi = useThree((state) => state.gl.extensions.has('WEBGL_multi_draw'));
@@ -573,6 +573,7 @@ export function Props({ yard, level = TIERS.high.props, library: given = null, l
     if (crowd) {
       crowd.crowd.object.visible = reach.shown;
       crowd.crowd.update(state.camera, state.gl.domElement.height);
+      if (crowd.crowd.wanted.size > 0) demandNear(crowd.crowd.wanted);
     }
     const camera = state.camera as THREE.PerspectiveCamera;
     const fov = camera.isPerspectiveCamera ? camera.fov : 30;
