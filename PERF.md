@@ -237,6 +237,14 @@ Lighthouse 13 run on this Mac the way `checks/perf.yml` runs it, one run each, l
 
 With one car file blocked on the dev build the cars stayed at their far level while broadleaf trees, poles and people went full once the page was idle, and no app error was logged.
 
+### Lighter first download
+
+The pack is now one mesh with one primitive per material, each model kept as a range of vertices and indices in the primitive, which cut its JSON from 46 KB to 13 KB. It also holds the far level of the new benches, bike racks, walkway lamps and playground pieces, and it is 88.9 KB in all. It points at 256 px copies of the far leaf textures, 14 to 16 KB each, and the 512 px ones arrive with the full files. Phase one at a school without conifers fell from 239 KB to 116 KB. At the whole campus view at 1920 by 1080 on high, the 256 px crowns differ from the 512 px ones in 0.01 percent of pixels.
+
+On the slow profile on this Mac, at loads of 12 falling to 9, the yard's first picture came at 6.91, 8.24 and 6.72 s on the build before the models, 8.28, 8.75 and 7.84 s on round 4 and 8.77, 7.81 and 8.65 s now. The pack and its textures now arrive before three.js does. The time left is main thread work after three.js arrives.
+
+With the small props in, the busiest beat draws 109 calls and 455k triangles on high, 78 calls and 150k on medium and 46 calls and 66k on low. Firefox stays at 115 calls or fewer on high. The Intel chip on medium at the busiest beat took 8.66 ms of GPU time per frame at the median.
+
 ## Roofs and walls
 
 On 2026-11-14 the buildings got real roofs and walls. Campus roofs show the USDA aerial photo of that roof, with the shadows baked into the photo lifted, tree crowns over the roof removed and a plain rim about 1.5 m wide in the roof's own colour. Dark and strongly coloured roofs are pulled toward a light tone so no roof is darker than the hottest ground colours, and a coloured roof keeps about a third of its colour. The site's guessed rooftop units sink out of sight wherever a roof has a photo, because the photo shows the real ones. Neighbouring buildings keep their plain clay look. Walls get a brick texture tinted by each building's tone, and the windows are a dark cool pane with a thin light frame and a faint sky tint at grazing angles.
