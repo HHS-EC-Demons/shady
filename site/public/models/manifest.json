@@ -1,0 +1,324 @@
+{
+ "models": [
+  {
+   "name": "car-coupe",
+   "kind": "car",
+   "source": "https://poly.pizza/m/1mkmFkAz5v",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 2937,
+    "lod1": 379
+   },
+   "bytes": 39904
+  },
+  {
+   "name": "car-hatchback",
+   "kind": "car",
+   "source": "https://poly.pizza/m/unqqkULtRU",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 2939,
+    "lod1": 376
+   },
+   "bytes": 39316
+  },
+  {
+   "name": "car-pickup",
+   "kind": "car",
+   "source": "https://poly.pizza/m/qn4grQgHm8",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 2938,
+    "lod1": 378
+   },
+   "bytes": 44748
+  },
+  {
+   "name": "car-sedan",
+   "kind": "car",
+   "source": "https://poly.pizza/m/Cz6yDaUcM9",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 2954,
+    "lod1": 323
+   },
+   "bytes": 36556
+  },
+  {
+   "name": "car-suv",
+   "kind": "car",
+   "source": "https://poly.pizza/m/xsMtZhBkxL",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 2939,
+    "lod1": 353
+   },
+   "bytes": 39644
+  },
+  {
+   "name": "car-van",
+   "kind": "car",
+   "source": "https://poly.pizza/m/BbRojf2v3H",
+   "author": "PuKkBuMXDD",
+   "licence": "CC BY 3.0",
+   "triangles": {
+    "lod0": 2939,
+    "lod1": 378
+   },
+   "bytes": 39084
+  },
+  {
+   "name": "person-run",
+   "kind": "person",
+   "source": "https://poly.pizza/m/HMnuH5geEG",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 1469,
+    "lod1": 141
+   },
+   "bytes": 23868
+  },
+  {
+   "name": "person-stand",
+   "kind": "person",
+   "source": "https://poly.pizza/m/HMnuH5geEG",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 1468,
+    "lod1": 140
+   },
+   "bytes": 23428
+  },
+  {
+   "name": "person-walk-b",
+   "kind": "person",
+   "source": "https://poly.pizza/m/AQsd9ngvKU",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 1468,
+    "lod1": 141
+   },
+   "bytes": 24208
+  },
+  {
+   "name": "person-walk",
+   "kind": "person",
+   "source": "https://poly.pizza/m/XqzeZGB7iU",
+   "author": "Quaternius",
+   "licence": "CC0 1.0",
+   "triangles": {
+    "lod0": 1468,
+    "lod1": 141
+   },
+   "bytes": 22988
+  },
+  {
+   "name": "pole-lot-double",
+   "kind": "light pole",
+   "source": "https://poly.pizza/m/a7GJySoqzuL",
+   "author": "Warren Reid",
+   "licence": "CC BY 3.0",
+   "triangles": {
+    "lod0": 222,
+    "lod1": 144
+   },
+   "bytes": 8344
+  },
+  {
+   "name": "pole-lot",
+   "kind": "light pole",
+   "source": "https://poly.pizza/m/a7GJySoqzuL",
+   "author": "Warren Reid",
+   "licence": "CC BY 3.0",
+   "triangles": {
+    "lod0": 192,
+    "lod1": 110
+   },
+   "bytes": 7732
+  },
+  {
+   "name": "tree-cedar",
+   "kind": "tree",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck (generator, leaf textures); bark photos by ambientCG (Lennart Demes)",
+   "licence": "MIT (generator and leaf textures); CC0 1.0 (bark). Far leaf cluster texture is a composite of the MIT leaf texture made here",
+   "triangles": {
+    "lod0": 4980,
+    "lod1": 680,
+    "lod2": 118,
+    "lod2-solid": 90
+   },
+   "bytes": 116776
+  },
+  {
+   "name": "tree-new",
+   "kind": "tree",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck (generator, leaf textures); bark photos by ambientCG (Lennart Demes)",
+   "licence": "MIT (generator and leaf textures); CC0 1.0 (bark). Far leaf cluster texture is a composite of the MIT leaf texture made here",
+   "triangles": {
+    "lod0": 2484,
+    "lod1": 658,
+    "lod2": 118,
+    "lod2-solid": 90
+   },
+   "bytes": 86492
+  },
+  {
+   "name": "tree-oak-a",
+   "kind": "tree",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck (generator, leaf textures); bark photos by ambientCG (Lennart Demes)",
+   "licence": "MIT (generator and leaf textures); CC0 1.0 (bark). Far leaf cluster texture is a composite of the MIT leaf texture made here",
+   "triangles": {
+    "lod0": 4978,
+    "lod1": 689,
+    "lod2": 118,
+    "lod2-solid": 90
+   },
+   "bytes": 110088
+  },
+  {
+   "name": "tree-oak-b",
+   "kind": "tree",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck (generator, leaf textures); bark photos by ambientCG (Lennart Demes)",
+   "licence": "MIT (generator and leaf textures); CC0 1.0 (bark). Far leaf cluster texture is a composite of the MIT leaf texture made here",
+   "triangles": {
+    "lod0": 4980,
+    "lod1": 688,
+    "lod2": 118,
+    "lod2-solid": 90
+   },
+   "bytes": 111720
+  },
+  {
+   "name": "tree-pecan",
+   "kind": "tree",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck (generator, leaf textures); bark photos by ambientCG (Lennart Demes)",
+   "licence": "MIT (generator and leaf textures); CC0 1.0 (bark). Far leaf cluster texture is a composite of the MIT leaf texture made here",
+   "triangles": {
+    "lod0": 4978,
+    "lod1": 680,
+    "lod2": 118,
+    "lod2-solid": 90
+   },
+   "bytes": 113920
+  },
+  {
+   "name": "tree-pine",
+   "kind": "tree",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck (generator, leaf textures); bark photos by ambientCG (Lennart Demes)",
+   "licence": "MIT (generator and leaf textures); CC0 1.0 (bark). Far leaf cluster texture is a composite of the MIT leaf texture made here",
+   "triangles": {
+    "lod0": 3828,
+    "lod1": 660,
+    "lod2": 118,
+    "lod2-solid": 90
+   },
+   "bytes": 90908
+  },
+  {
+   "name": "tree-young-a",
+   "kind": "tree",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck (generator, leaf textures); bark photos by ambientCG (Lennart Demes)",
+   "licence": "MIT (generator and leaf textures); CC0 1.0 (bark). Far leaf cluster texture is a composite of the MIT leaf texture made here",
+   "triangles": {
+    "lod0": 4980,
+    "lod1": 690,
+    "lod2": 118,
+    "lod2-solid": 90
+   },
+   "bytes": 115720
+  },
+  {
+   "name": "tree-young-b",
+   "kind": "tree",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck (generator, leaf textures); bark photos by ambientCG (Lennart Demes)",
+   "licence": "MIT (generator and leaf textures); CC0 1.0 (bark). Far leaf cluster texture is a composite of the MIT leaf texture made here",
+   "triangles": {
+    "lod0": 4980,
+    "lod1": 690,
+    "lod2": 118,
+    "lod2-solid": 90
+   },
+   "bytes": 117324
+  },
+  {
+   "name": "tex/bark-1347c2ad.webp",
+   "kind": "texture",
+   "source": "https://ambientcg.com/view?id=Bark014",
+   "author": "ambientCG",
+   "licence": "CC0 1.0",
+   "bytes": 50108
+  },
+  {
+   "name": "tex/bark-d0ba7a52.webp",
+   "kind": "texture",
+   "source": "https://ambientcg.com/view?id=Bark012",
+   "author": "ambientCG",
+   "licence": "CC0 1.0",
+   "bytes": 63348
+  },
+  {
+   "name": "tex/leaves-2aab0f9a.webp",
+   "kind": "texture",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck",
+   "licence": "MIT",
+   "bytes": 100692
+  },
+  {
+   "name": "tex/leaves-381dd8e4.webp",
+   "kind": "texture",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck",
+   "licence": "MIT",
+   "bytes": 163584
+  },
+  {
+   "name": "tex/leaves-af9e0786.webp",
+   "kind": "texture",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck",
+   "licence": "MIT",
+   "bytes": 75096
+  },
+  {
+   "name": "tex/leaves-far-03326849.webp",
+   "kind": "texture",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck",
+   "licence": "MIT",
+   "bytes": 59832
+  },
+  {
+   "name": "tex/leaves-far-ad2a88c6.webp",
+   "kind": "texture",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck",
+   "licence": "MIT",
+   "bytes": 68252
+  },
+  {
+   "name": "tex/leaves-far-f4bf5692.webp",
+   "kind": "texture",
+   "source": "https://github.com/dgreenheck/ez-tree",
+   "author": "Daniel Greenheck",
+   "licence": "MIT",
+   "bytes": 73590
+  }
+ ]
+}
