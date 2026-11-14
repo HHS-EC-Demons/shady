@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { levelFor, reach } from './forest';
+import { arrived, levelFor, reach } from './forest';
 import { TINTED, makeMaterial, type Library, type Look, type Model, type Part } from './library';
 
 export const SHADOW_LAYER = 1;
@@ -21,6 +21,8 @@ type Slot = {
   shadeSlots: Int32Array;
 };
 
+type Batch = { mesh: THREE.BatchedMesh; ids: Map<string, number[]>; slots: Int32Array };
+
 type Herd = { mesh: THREE.InstancedMesh; part: Part | null; tinted: boolean; colored: boolean; count: number };
 
 const WHITE = new THREE.Color(1, 1, 1);
@@ -38,6 +40,7 @@ const screenMatrix = new THREE.Matrix4();
 const noRay = () => {};
 const NONE: number[] = [];
 const NO_HERDS: Herd[][] = [];
+const PLACE_SLICE = 256;
 
 function solid(parts: Part[]): THREE.BufferGeometry {
   let vertices = 0;
@@ -92,6 +95,7 @@ export class Crowd {
     private library: Library,
     members: Member[],
     private options: CrowdOptions,
+    lazy = false,
   ) {
     this.members = members.map((member) => ({ ...member, matrix: member.matrix.clone(), tint: member.tint?.clone() ?? null }));
     this.levels = new Int8Array(members.length).fill(options.edges.length);
@@ -99,12 +103,17 @@ export class Crowd {
     this.inside = new Uint8Array(members.length).fill(1);
     this.casting = new Uint8Array(members.length).fill(1);
     this.centres = new Float32Array(members.length * 3);
+    if (!lazy) for (const _ of this.steps()) continue;
+  }
+
+  *steps(): Generator<void> {
+    const { library, options, members } = this;
     const names = new Set<string>([...(options.candidates ?? []), ...members.map((member) => member.model)]);
     const models = [...names].map((name) => library.models.get(name)).filter((model): model is Model => model !== undefined);
     const byLook = new Map<string, Entry[]>();
     for (const model of models) {
       model.levels.forEach((parts, level) => {
-        for (const part of parts) {
+        for (const part of parts ?? []) {
           const list = byLook.get(part.look) ?? [];
           list.push({ model: model.name, level, part });
           byLook.set(part.look, list);
@@ -129,7 +138,8 @@ export class Crowd {
       const herd = far.length > 0 ? makeMaterial(lookOf) : null;
       if (batch) this.materials.push(batch);
       if (herd) this.materials.push(herd);
-      const build = (list: Entry[], shadow: boolean, material: THREE.Material) => {
+      const prepare = (mesh: THREE.Mesh, shadow: boolean) => this.prepare(mesh, shadow, shadow ? `${key} shadow` : key);
+      const build = function* (list: Entry[], shadow: boolean, material: THREE.Material): Generator<void, Batch> {
         let vertices = 0;
         let indices = 0;
         for (const entry of list) {
@@ -144,21 +154,23 @@ export class Crowd {
           levels[entry.level] = mesh.addGeometry(entry.part.geometry);
           if (first < 0) first = levels[entry.level];
           ids.set(entry.model, levels);
+          yield;
         }
         const slots = new Int32Array(members.length);
         for (let index = 0; index < members.length; index += 1) {
           slots[index] = mesh.addInstance(first);
           mesh.setVisibleAt(slots[index], false);
+          if (index % PLACE_SLICE === PLACE_SLICE - 1) yield;
         }
         mesh.perObjectFrustumCulled = false;
         mesh.sortObjects = false;
-        this.prepare(mesh, shadow, shadow ? `${key} shadow` : key);
+        prepare(mesh, shadow);
         return { mesh, ids, slots };
       };
-      const main = batch ? build(near, false, batch) : null;
+      const main = batch ? yield* build(near, false, batch) : null;
       if (main && colored && members.length > 0) main.mesh.setColorAt(main.slots[0], WHITE);
       const deep = near.filter(casts);
-      const shade = batch && deep.length > 0 ? build(deep, true, batch) : null;
+      const shade = batch && deep.length > 0 ? yield* build(deep, true, batch) : null;
       const parts = new Map<string, (Part | null)[]>();
       for (const entry of entries) {
         const levels = parts.get(entry.model) ?? [null, null, null];
@@ -188,14 +200,19 @@ export class Crowd {
           solidParts.set(name, list);
         }
       }
+      yield;
     }
     for (const [name, parts] of solidParts) {
       const split = name.lastIndexOf(' ');
       const geometry = solid(parts);
       this.owned.push(geometry);
       this.herd(this.shades, { model: name.slice(0, split), level: Number(name.slice(split + 1)), part: parts[0] }, new THREE.InstancedMesh(geometry, plain, count), true, false, false);
+      yield;
     }
-    this.members.forEach((_, index) => this.place(index));
+    for (let index = 0; index < members.length; index += 1) {
+      this.place(index);
+      if (index % PLACE_SLICE === PLACE_SLICE - 1) yield;
+    }
     this.pack();
   }
 
@@ -252,16 +269,21 @@ export class Crowd {
     this.show(index, true);
   }
 
-  private deepOf(level: number, top: number): number {
+  private reached(model: string, level: number): number {
+    const levels = this.library.models.get(model)?.levels;
+    return levels ? arrived(levels, level) : level;
+  }
+
+  private deepOf(model: string, level: number, top: number): number {
     const floor = this.options.floor;
-    return floor === null ? -1 : Math.min(Math.max(level, floor), top);
+    return floor === null ? -1 : this.reached(model, Math.min(Math.max(level, floor), top));
   }
 
   private show(index: number, force = false): void {
     const member = this.members[index];
     const top = this.tops[index];
-    const level = Math.min(this.levels[index], top);
-    const deep = this.deepOf(level, top);
+    const level = this.reached(member.model, Math.min(this.levels[index], top));
+    const deep = this.deepOf(member.model, level, top);
     for (let which = 0; which < this.slots.length; which += 1) {
       const slot = this.slots[which];
       if (slot.main) {
@@ -294,7 +316,7 @@ export class Crowd {
       const member = this.members[index];
       if (member.hidden) continue;
       const top = this.tops[index];
-      const level = Math.min(this.levels[index], top);
+      const level = this.reached(member.model, Math.min(this.levels[index], top));
       if (this.inside[index] === 1 && level >= bulk) {
         const herds = (this.shown.get(member.model) ?? NO_HERDS)[level];
         if (herds) {
@@ -306,7 +328,7 @@ export class Crowd {
           }
         }
       }
-      const deep = this.deepOf(level, top);
+      const deep = this.deepOf(member.model, level, top);
       if (this.casting[index] === 1 && deep >= bulk) {
         const herds = (this.shades.get(member.model) ?? NO_HERDS)[deep];
         if (herds) {
@@ -419,4 +441,10 @@ export class Crowd {
     for (const material of this.materials) material.dispose();
     this.object.clear();
   }
+}
+
+export async function buildCrowd(library: Library, members: Member[], options: CrowdOptions, pause: () => Promise<void>): Promise<Crowd> {
+  const crowd = new Crowd(library, members, options, true);
+  for (const _ of crowd.steps()) await pause();
+  return crowd;
 }
