@@ -14,8 +14,9 @@ import { BLOB_LIFT, buildBlob } from './models';
 import { TIERS, type Levels, type PropLevel } from './quality';
 import { keep, take, useCrowd, useFresh } from './stages';
 
-type Placement = { x: number; y: number; heading: number; stretch?: number; color?: THREE.Color; kind?: string };
+type Placement = { x: number; y: number; heading: number; stretch?: number; scale?: Vec; color?: THREE.Color; kind?: string };
 type Kind = 'cars' | 'poles' | 'nets' | 'posts' | 'goals' | 'people';
+type Listed = Kind | 'furniture';
 type Model = { geometry: THREE.BufferGeometry; material: THREE.MeshStandardMaterial };
 
 const CAR_SHARE = 0.52;
@@ -48,13 +49,14 @@ const TYRE = 0.3;
 const SILL = 0.62;
 const GLASS: Vec = [0.3, 0.335, 0.37];
 const KINDS: Kind[] = ['cars', 'poles', 'nets', 'posts', 'goals', 'people'];
-const CROWDED = new Map<Kind, ModelKind>([
+const CROWDED = new Map<Listed, ModelKind>([
   ['cars', 'cars'],
   ['poles', 'poles'],
   ['people', 'people'],
+  ['furniture', 'furniture'],
 ]);
 const PROP_REFERENCE = 4.5;
-const SIZES: Record<string, number> = { car: 4.5, person: 1.7, pole: 9 };
+const SIZES: Record<string, number> = { car: 4.5, person: 1.7, pole: 9, bench: 1.8, bike: 2.6, lamp: 7.5, play: 3.5 };
 
 function hash(a: number, b: number, salt: number): number {
   let h = Math.imul(a | 0, 0x27d4eb2d) ^ Math.imul(b | 0, 0x165667b1) ^ Math.imul(salt | 0, 0x9e3779b1);
@@ -413,14 +415,14 @@ function blobs(yard: Yard, blob: ReturnType<typeof buildBlob>, cars: Placement[]
   return mesh;
 }
 
-type Placed = { lists: Record<Kind, Placement[]>; gear: GearMeshes };
+type Placed = { lists: Record<Listed, Placement[]>; gear: GearMeshes };
 
 export function propKinds(library: Library | null): string {
   return [...CROWDED.values()].filter((kind) => library?.kinds.has(kind)).join(' ');
 }
 
 function placeAll(yard: Yard, level: NonNullable<PropLevel>, kinds: string): Placed {
-  const gear = buildGear(yard.campus, yard.middle, kinds.includes('poles'));
+  const gear = buildGear(yard.campus, yard.middle, kinds.includes('poles'), kinds.includes('furniture'));
   const nets = placeGear(gear.nets);
   return {
     lists: {
@@ -430,6 +432,7 @@ function placeAll(yard: Yard, level: NonNullable<PropLevel>, kinds: string): Pla
       posts: nets,
       goals: placeGear(gear.uprights).map((item) => ({ ...item, stretch: 1 })),
       people: thin(placePeople(yard, level.light), level.people),
+      furniture: gear.furniture.map(({ model, ...rest }) => ({ ...rest, kind: model })),
     },
     gear,
   };
@@ -444,12 +447,12 @@ export function primeProps(yard: Yard, level: PropLevel = TIERS.high.props, kind
 }
 
 function sizeOf(kind: string): number {
-  return SIZES[kind.slice(0, kind.indexOf('-'))] ?? PROP_REFERENCE;
+  return SIZES[kind.includes('-') ? kind.slice(0, kind.indexOf('-')) : kind] ?? PROP_REFERENCE;
 }
 
 type Crowded = { crowd: Crowd; box: THREE.Box3; kinds: string; object: THREE.Object3D; dispose: () => void };
 
-function membersOf(yard: Yard, library: Library, lists: Record<Kind, Placement[]>): { members: Member[]; box: THREE.Box3 } {
+function membersOf(yard: Yard, library: Library, lists: Record<Listed, Placement[]>): { members: Member[]; box: THREE.Box3 } {
   const members: Member[] = [];
   const box = new THREE.Box3();
   const spot = new THREE.Vector3();
@@ -461,8 +464,8 @@ function membersOf(yard: Yard, library: Library, lists: Record<Kind, Placement[]
       const [x, , z] = yard.toScene(item.x, item.y);
       spot.set(x, 0, z);
       box.expandByPoint(spot);
-      turn.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, item.heading + (kind === 'poles' ? 0 : Math.PI / 2));
-      members.push({ model: item.kind, matrix: new THREE.Matrix4().compose(spot, turn, one), tint: item.color ?? null, size: sizeOf(item.kind) });
+      turn.setFromAxisAngle(THREE.Object3D.DEFAULT_UP, item.heading + (kind === 'poles' || kind === 'furniture' ? 0 : Math.PI / 2));
+      members.push({ model: item.kind, matrix: new THREE.Matrix4().compose(spot, turn, item.scale ? new THREE.Vector3(...item.scale) : one), tint: item.color ?? null, size: sizeOf(item.kind) });
     }
   }
   return { members, box };
@@ -476,7 +479,7 @@ function crowdOptions(levels: Levels, shadows: boolean, multi: boolean): CrowdOp
   return { edges: [levels.props], reference: PROP_REFERENCE, floor: shadows ? 1 : null, bulk: multi ? 1 : 0 };
 }
 
-const PROP_KINDS: readonly ModelKind[] = ['cars', 'poles', 'people'];
+const PROP_KINDS: readonly ModelKind[] = ['cars', 'poles', 'people', 'furniture'];
 
 export function Props({ yard, level = TIERS.high.props, library: given = null, levels = TIERS.high.levels }: { yard: Yard; level?: PropLevel; library?: Library | null; levels?: Levels }) {
   const library = useFresh(given, PROP_KINDS);

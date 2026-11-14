@@ -5,7 +5,8 @@ import { at, courtFences, frameOf, layoutOf, type Gear } from '@/engine/sports';
 import { Clay, type Vec } from './clay';
 import { onRoof } from './layout';
 
-export type GearMeshes = { solid: THREE.BufferGeometry | null; sheer: THREE.BufferGeometry | null; uprights: Gear[]; nets: Gear[]; lamps: { x: number; y: number; heading: number }[] };
+export type Furnished = { model: string; x: number; y: number; heading: number; scale?: Vec };
+export type GearMeshes = { solid: THREE.BufferGeometry | null; sheer: THREE.BufferGeometry | null; uprights: Gear[]; nets: Gear[]; lamps: { x: number; y: number; heading: number }[]; furniture: Furnished[] };
 
 type Middle = [number, number];
 type Pair = { solid: THREE.BufferGeometry; sheer: THREE.BufferGeometry | null };
@@ -408,6 +409,17 @@ function modelsOf(): Models {
 }
 
 const PLAY_REACH = [2.6, 2.6, 2.1, 0.7];
+const BIKE_STRETCH = 1.23;
+
+export function playModel(kind: number, x: number, y: number): { model: string; turn: number } {
+  if (kind === 0) return { model: 'play-slide', turn: Math.PI / 2 };
+  if (kind === 1) return { model: 'play-swings', turn: 0 };
+  if (kind === 2) {
+    const mixed = Math.imul(Math.imul(Math.round(x * 10), 73856093) ^ Math.imul(Math.round(y * 10), 19349663), 0x45d9f3b);
+    return { model: ((mixed ^ (mixed >>> 16)) >>> 0) % 2 === 1 ? 'play-monkeybars' : 'play-climber', turn: 0 };
+  }
+  return { model: 'play-seesaw', turn: 0 };
+}
 const PLAY_ORDER = [0, 1, 2, 3, 3, 3];
 
 function seeded(seed: number): () => number {
@@ -570,7 +582,7 @@ function matrixAt(spot: Vec, heading: number, stretch: Vec = [1, 1, 1]): THREE.M
   return new THREE.Matrix4().compose(new THREE.Vector3(...spot), new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), heading), new THREE.Vector3(...stretch));
 }
 
-export function buildGear(campus: Campus, middle: Middle, apart = false): GearMeshes {
+export function buildGear(campus: Campus, middle: Middle, apart = false, furnished = false): GearMeshes {
   const toScene = (x: number, y: number): Vec => [x - middle[0], 0, -(y - middle[1])];
   const free = (x: number, y: number) => atHome(campus, x, y) && !onRoof(campus, x, y);
   const parts = modelsOf();
@@ -581,6 +593,8 @@ export function buildGear(campus: Campus, middle: Middle, apart = false): GearMe
   const uprights: Gear[] = [];
   const nets: Gear[] = [];
   const lamps: { x: number; y: number; heading: number }[] = [];
+  const furniture: Furnished[] = [];
+  const lots = campus.patches.filter((patch) => patch.label === 'Parking lot');
   const pair = (model: Pair, spot: Vec, heading: number, stretch?: Vec) => {
     const matrix = matrixAt(spot, heading, stretch);
     solid.add(model.solid, matrix);
@@ -606,7 +620,13 @@ export function buildGear(campus: Campus, middle: Middle, apart = false): GearMe
         ...campus.patches.filter((other) => other !== patch && (other.sport !== undefined || /court|field/i.test(other.label ?? ''))).map((other) => other.ring),
         ...campus.blocks.map((block) => block.ring),
       ].filter(near);
-      for (const piece of playPieces(patch, 7919 + index * 104729, avoid)) solid.add(parts.play[piece.kind], matrixAt(toScene(piece.x, piece.y), piece.heading));
+      for (const piece of playPieces(patch, 7919 + index * 104729, avoid)) {
+        if (!furnished) solid.add(parts.play[piece.kind], matrixAt(toScene(piece.x, piece.y), piece.heading));
+        else {
+          const { model, turn } = playModel(piece.kind, piece.x, piece.y);
+          furniture.push({ model, x: piece.x, y: piece.y, heading: piece.heading + turn });
+        }
+      }
     }
   });
   const budget = { posts: MOST_POSTS };
@@ -642,8 +662,21 @@ export function buildGear(campus: Campus, middle: Middle, apart = false): GearMe
     if (thing.kind === 'door' || thing.kind === 'main door' || !free(thing.x, thing.y)) continue;
     const spot = toScene(thing.x, thing.y);
     const heading = thing.kind === 'flagpole' ? 0 : headingFor(campus, thing);
-    if (apart && thing.kind === 'lamp') {
+    const inLot = thing.kind === 'lamp' && lots.some((lot) => insideRing(lot.ring, thing.x, thing.y));
+    if (apart && inLot) {
       lamps.push({ x: thing.x, y: thing.y, heading });
+      continue;
+    }
+    if (furnished && thing.kind === 'lamp' && !inLot) {
+      furniture.push({ model: 'lamp-walkway', x: thing.x, y: thing.y, heading });
+      continue;
+    }
+    if (furnished && thing.kind === 'bench') {
+      furniture.push({ model: 'bench', x: thing.x, y: thing.y, heading: heading + Math.PI });
+      continue;
+    }
+    if (furnished && thing.kind === 'bikes') {
+      furniture.push({ model: 'bike-rack', x: thing.x, y: thing.y, heading, scale: [BIKE_STRETCH, 1, 1] });
       continue;
     }
     const model = thing.kind === 'flagpole' ? parts.flagpole : thing.kind === 'bench' ? parts.bench : thing.kind === 'bikes' ? parts.bikes : parts.lamp;
@@ -659,7 +692,7 @@ export function buildGear(campus: Campus, middle: Middle, apart = false): GearMe
     sheer.add(geometry);
     geometry.dispose();
   }
-  return { solid: solid.geometry(), sheer: sheer.geometry(), uprights, nets, lamps };
+  return { solid: solid.geometry(), sheer: sheer.geometry(), uprights, nets, lamps, furniture };
 }
 
 function backstop(solid: Clay, sheer: Clay, toScene: (x: number, y: number) => Vec, item: Gear): void {
